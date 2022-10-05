@@ -13,29 +13,27 @@ $edgeVer = ((Get-AppxPackage -Name *MicrosoftEdge.*).Version -split '\.')[0]
 $edge = New-Object OpenQA.Selenium.Edge.EdgeDriver("$CurrentDir\$edgeVer",$options)
 $edge.Manage().Window.Minimize(); "`n"*3
 
-$work1 = { $edge.Navigate().GoToURL($_);  sleep -Seconds 1
-  $name = split-path $_ -Leaf
+$work1 = { $name = split-path $_ -Leaf
   $edge.FindElements([OpenQA.Selenium.By]::XPath('//*[@id="foreignbuy"]/table[1]/tbody/tr')).GetAttribute('innerHTML').
   Trim() -replace '<[^>]+>',';' -replace ';;',',' -replace ';','' | Out-File "$outPath\$name.csv" -Encoding utf8 -Force
   "Saved file : $name.csv"
 }
 
-$work2 = { $edge.Navigate().GoToURL($web[2]); sleep -Seconds 1; 1..2 | % {
+$work2 = { 1..2 | % {
   $all = $edge.FindElements([OpenQA.Selenium.By]::XPath('//*[@id="foreignbuy"]/div[1]/div['+$_+']')).text -split "`r`n" 
   $t = $all | select -skip 2
   (0..(($t.count/3)-1) | % { $t[$_*3] +','+ $t[$_*3+1] +','+ $t[$_*3+2] -replace "`r"} | Out-File "$outPath\$($all[0]).csv" -Encoding utf8 -Force )
   "Saved file : $($all[0]).csv" }
 }
 
-$work3  = { $edge.Navigate().GoToURL($web[3]); sleep -Seconds 1; 1,3 | % {
+$work3  = { 1,3 | % {
   $name = (split-path $web[3] -Leaf)+'-'+$edge.FindElements([OpenQA.Selenium.By]::XPath('//*[@id="foreignbuy"]/div/div[1]/div['+$_+']')).Text -replace ' ','-'
   $edge.FindElements([OpenQA.Selenium.By]::XPath('//*[@id="foreignbuy"]/div/div[1]/div['+($_+1)+']/div/div/div')).GetAttribute('innerHTML').
   Trim() -replace '<[^>]+>',';' -replace ';;;;',',' -replace ';','' | Out-File "$outPath\$name.csv" -Encoding utf8 -Force
-"Saved file : $name.csv"}
+  "Saved file : $name.csv"}
 }
 
-$work4 = { $edge.Navigate().GoToURL($_); sleep -Seconds 1
-  $name = split-path $_ -Leaf
+$work4 = { $name = split-path $_ -Leaf
   $edge.FindElements([OpenQA.Selenium.By]::XPath('//*[@id="foreignbuy"]/table/tbody/tr')).GetAttribute('innerHTML').
   Trim() -replace '<[^>]+>',';' -replace ';;;',',' -replace ';','' | Out-File "$outPath\$name.csv" -Encoding utf8 -Force
   "Saved file : $name.csv"
@@ -47,6 +45,7 @@ $host.UI.RawUI.WindowSize = New-Object System.Management.Automation.Host.size(80
 $web | % {
   $perc = [math]::Round($web.IndexOf($_)/$web.Count * 100, 1);
   Write-Progress "Processing $_" "Complete : $perc %" -perc $perc
+  $edge.Navigate().GoToURL($_); Sleep -Seconds 1
   switch ($_) {
     {$_ -in $web[0..1]} {&$work1}
     $web[2]             {&$work2}
