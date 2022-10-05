@@ -1,4 +1,4 @@
-﻿# Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"
+# Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"
 # Import-Module "\\drsitsrv1\DRSsupport$\Projects\2022\Test-BCS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
 # Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
 # Import-Module "\\fxt8\c$\H\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
@@ -2135,6 +2135,44 @@ $UdpClient.Connect(([System.Net.IPAddress]::Parse('10.28.222.14')),7)
 $UdpClient.Send($MagicPacket,$MagicPacket.Length)
 $UdpClient.Close()
 }
+
+
+
+function Get-Wsus($ServerName='drsopsmgr2') {
+  [reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration") | out-null
+  [Microsoft.UpdateServices.Administration.AdminProxy]::getUpdateServer($ServerName,$false,8530) 
+}
+
+Function GetUpdateState {
+param([string[]]$kbnumber='KB5016616',[string]$wsusserver='drsopsmgr2',[string]$port=8530
+)
+$report = @()
+[void][reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration")
+$wsus = [Microsoft.UpdateServices.Administration.AdminProxy]::getUpdateServer($wsusserver,$False,8530)
+$CompSc = new-object Microsoft.UpdateServices.Administration.ComputerTargetScope
+$updateScope = new-object Microsoft.UpdateServices.Administration.UpdateScope; 
+$updateScope.UpdateApprovalActions = [Microsoft.UpdateServices.Administration.UpdateApprovalActions]::Install
+foreach ($kb in $kbnumber){ #Loop against each KB number passed to the GetUpdateState function 
+   $updates = $wsus.GetUpdates($updateScope) | ?{$_.Title -match $kb} #Getting every update where the title matches the $kbnumber
+       foreach($update in $updates){ #Loop against the list of updates I stored in $updates in the previous step
+          $update.GetUpdateInstallationInfoPerComputerTarget($CompSc) | ?{$_.UpdateApprovalAction -eq "Install"} |  % { #for the current update
+#Getting the list of computer object IDs where this update is supposed to be installed ($_.UpdateApprovalAction -eq "Install")
+          $Comp = $wsus.GetComputerTarget($_.ComputerTargetId)# using #Computer object ID to retrieve the computer object properties (Name, #IP address)
+          $info = "" | select UpdateTitle, LegacyName, SecurityBulletins, Computername, OS ,IpAddress, UpdateInstallationStatus, UpdateApprovalAction #Creating a custom PowerShell object to store the information
+          $info.UpdateTitle = $update.Title
+          $info.LegacyName = $update.LegacyName
+          $info.SecurityBulletins = ($update.SecurityBulletins -join ';')
+          $info.Computername = $Comp.FullDomainName
+          $info.OS = $Comp.OSDescription
+          $info.IpAddress = $Comp.IPAddress
+          $info.UpdateInstallationStatus = $_.UpdateInstallationState
+          $info.UpdateApprovalAction = $_.UpdateApprovalAction
+          $report+=$info # Storing the information into the $report variable 
+        }
+     }
+  }
+$report | ?{$_.UpdateInstallationStatus -ne 'NotApplicable' -and $_.UpdateInstallationStatus -ne 'Unknown' -and $_.UpdateInstallationStatus -ne 'Installed' } #|  Export-Csv -Path c:\temp\rep_wsus.csv -Append -NoTypeInformation #Filtering the report to list only computers where the updates are not installed
+} # Usage: GetUpdateState -kbnumber KB5016616 -wsusserver drsopsmgr2 -port 8530
 
 Init;Main
 
