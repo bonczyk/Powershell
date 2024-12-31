@@ -1,20 +1,671 @@
-# Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"
-# Import-Module "\\drsitsrv1\DRSsupport$\Projects\2022\Test-BCS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
-# Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
-# Import-Module "\\fxt8\c$\H\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
-# [Management.Automation.WildcardPattern]::Escape('test[1].txt')
-# [regex]::Escape("(foo)")
-# Run-Remote $list "powershell -command `"Start-Transcript c:\temp\rb_log12-18-22.txt; Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Edge*\`" }; Stop-Transcript`""
-# test-path C:\WINDOWS\System32\DriverStore\FileRepository\hpcu250v.inf_amd64_f9bc7c093f784e4e\hpcu250v.inf
+<#
+ Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"; cd DUB:
+ Import-Module "\\drsitsrv1\DRSsupport$\Projects\2022\Test-BCS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
+ Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
+ Import-Module "\\fxt8\c$\H\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
+ [Management.Automation.WildcardPattern]::Escape('test[1].txt (foo)')
+ [regex]::Escape("test[1].txt (foo)")
+ Run-Remote $pc "powershell -command `"Start-Transcript c:\temp\log_appx.txt; Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Edge*\`" }; Stop-Transcript`""
+ 
+ adinfo
+ $l = Ping-DealersPCs
+
+ $out = $l | % {  [PSCustomObject]@{ PC = $_; folder=(Test-path "\\$_\c$\Program Files\DRS" ) } }
+ $a = $out.folder | % { [PSCustomObject]@{ PC = $_.DirectoryName; size=$_.Length } }
+
+ 
+ $list = $l | % { $path ="\\$_\c$\Temp\Logs\11023_*.txt";  if (Test-Path $path) { [PSCustomObject]@{ PC = $_; folder=(gci $path ) } } }
+ $list.folder | % { PraseNetUse (gc $_) } | select -Unique Remote
+
+#>
+
+function New-MyVM {
+$name = 'Win11-02'
+$mac = 'CC96E542BE9C'
+New-VM -Name $name -MemoryStartupBytes 16GB -NewVHDSizeBytes 50GB -Generation 1 -SwitchName 'Hyper-V Switch' -NewVHDPath "C:\ProgramData\Microsoft\Windows\Virtual Hard Disks\$name.vhdx" 
+Add-VMNetworkAdapter -VMName $name -IsLegacy $true -SwitchName 'Hyper-V Switch' -StaticMacAddress $mac
+Set-VMNetworkAdapter -VMName $name -StaticMacAddress $mac 
+Set-VMProcessor $name -Count 12
+}
+
+function Sync-File($f1,$f2,$fmask,$log = "c:\temp\logs\Sync.txt") {
+ $opt = "/R:1 /W:1 /xo /NP /NS /NC /NFL" -split ' '
+ robocopy.exe $f1 $f2 $fmask $opt >> $log
+ robocopy.exe $f2 $f1 $fmask $opt >> $log
+ (gc $log -Tail 690) | ? {$_.trim() -and $_ -notlike "   ROBOCOPY*" } | Out-File $log 
+}
+
+function Test-Tanium ($pcs,$restart=0) {
+#$pcs = @('HKK0Y04-LON','dkk0y04-dub','6ns3mm2-dub')
+ foreach ($pc in $pcs) {
+   $ver = Get-InstalledApp $pc "*tanium client*" 
+   $ser = Get-Service -ComputerName $pc "*win*" | select *
+    [PSCustomObject]@{ PC = $pc; Ver = $ver.AppName; service = $ser.Status}
+    if ($ser -and $ver -and $restart) { Get-Service -ComputerName $pc "*tanium client*" | Restart-Service -Verbose }
+ }
+}
+
+function Test-t {
+ $pc = '319GV04-DUB'
+ Run-r $pc "Get-appxprovisionedpackage –online | ? {`$_.DisplayName }"
+}
+
+function Run-r {
+  [CmdletBinding()] param( 
+    [Parameter(Mandatory = $True)] [string]$Pc = '5MK0Y04-DUB', $cmd, [switch]$noesc
+  )
+ if (!$pc) { "No PC name provided";break}; if (!(Aping $pc)) {'Offline';break}
+ if (!$noprase) { $cmd = $cmd -replace '"','\$&'} # $cmd = "Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Teams*\`" }"
+ $rr = Run-Remote $pc "powershell -command `"Start-Transcript c:\Temp\logs\logsps.txt; ''; $cmd; Stop-Transcript;`""
+ while (Get-Process -ComputerName $pc -id $rr.ProcessId -ErrorAction SilentlyContinue) {sleep -m 200}
+ $c = gc "\\$pc\c$\Temp\logs\logsps.txt" -Raw
+ ((($c -split '[\r\n]+(?=Transcript started)')[1] -split '\*\*\*\*+')[0] -split "`n`r" | select -Skip 1 | Out-String ).Trim()
+ Write-Verbose "PC = $pc"
+ Write-Verbose $cmd 
+ Write-Verbose "powershell -command `"Start-Transcript c:\temp\logs\logsps.txt; ''; $cmd; Stop-Transcript`""
+ <#
+  Run-r $pc { Get-AppxProvisionedPackage -Online | ? { $_.displayname -like "*teams*" } | Remove-AppxProvisionedPackage -Online }
+  Run-r $pc { DISM /Online /Add-ProvisionedAppxPackage /PackagePath:"c:\Temp\MSTeams-x64-n.msix" /SkipLicense /LogPath:"c:\Temp\Logs\Dism.txt" }
+  Run-r $pc { msiexec /i "c:\Temp\WIN.msi" ALLUSERS=1 /log c:\temp\logs\msiexec.txt }
+  Run-r 7TZXGL2-DUB { $updateSession = new-object -com "Microsoft.Update.Session"; $updates=$updateSession.CreateupdateSearcher().Search($criteria).Updates;wuauclt /reportnow }
+ #>
+}
+
+function PraseNetUse($netuse) {
+ $netuse -like '* \\*' | % {  $Status,$Local,$Remote,$Null = $_ -split ' +',4
+ [PSCustomObject]@{
+   Status = $Status
+   Local  = $Local
+   Remote = $Remote 
+ }}
+}
+
+function start-TS($pc='drs2019test1') {
+ $rpath = "\\$pc\C$\_ScanUpdates\"
+ $lpath = "C:\_ScanUpdates\"
+ if (-not (Test-Path $rpath)) { $null = mkdir $rpath -Force
+   copy $lpath* $rpath -Include "*.cab",'*.ps1' -Force -Recurse }
+ $opt = New-CimSessionOption -Protocol DCOM
+ $s = New-CimSession -Computername $pc -SessionOption $opt -OperationTimeoutSec 3 -ErrorAction Stop #-Credential $cred
+ $action = New-ScheduledTaskAction -Execute powershell -Argument "-executionpolicy bypass -file $lpath\ScanUpdates.ps1" -WorkingDirectory $lpath 
+ $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest -LogonType S4U 
+ if (Get-ScheduledTask 'Test-Scan' -CimSession $s) {Unregister-ScheduledTask 'Test-Scan'} 
+ #$newTS = New-ScheduledTask -Action $action -Description 'Test remote Task' -Principal $principal  #Register-ScheduledTask 'Test-Scan' -InputObject $newTS -CimSession $s
+ Register-ScheduledTask 'Test-Scan' -Action $action -Description 'Test remote Task' -Principal $principal -CimSession $s
+ Get-ScheduledTask -CimSession $s -TaskName 'Test-Scan' | Start-ScheduledTask 
+ Remove-CimSession $s 
+}
+
+function Get-PcInfoDesktops{
+$out = $adc | % { $pc = $_.Name
+ [PSCustomObject]@{ Hostname = $_.name;
+                    Model = Get-Model $pc
+                    Serial = (Get-WmiObject Win32_bios -ComputerName $pc).SerialNumber
+                    Ip = (aping $pc).address.IPAddressToString
+                    Mac = (Get-Mac $pc).MACAddress -join ', '
+                    Ver = (Get-Winver $pc).ver
+                  }
+} 
+Export-Xlsx -Path C:\Users\dsk_58691\Desktop\mm.xlsx -obj $out
+}
+
+function Get-Drama {
+ $year = Get-Date –f yyyy
+ $qtr = [math]::Ceiling((Get-Date).Month/3) 
+ $file = "G:\DRAMA\$year\$($year)Q$($qtr)\DRAMA Dashboard $year Q$qtr.xlsx"
+ Import-Excel $file -WorksheetName 'email log' | tee -Variable global:Drama
+}
+
+function secStr($s){
+
+$m = ConvertTo-SecureString 'Dr11ms11' -AsPlainText -Force
+$kod = $m | ConvertFrom-SecureString
+$q = $kod | ConvertTo-SecureString
+$q.Length
+
+$SecurePassword = ConvertTo-SecureString 'Dr11ms11' -AsPlainText -Force
+$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePassword)
+$UnsecurePassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+
+}
+
+function esc($text){
+ [Management.Automation.WildcardPattern]::Escape($text)
+ [regex]::Escape($text)
+} 
+
+function Init {
+  #$ErrorActionPreference='silentlycontinue'
+  $global:ModulePath  = 'H:\MB\PS\modules\MBMod\0.3\' 
+  $global:ModulePath1 = $PSCommandPath
+  $global:ModulePath2 = (Get-Module -Name mbmod).ModuleBase
+  $global:ModuleDir   = if ($ModulePath2) { Split-Path (Split-Path $ModulePath2) }
+  $global:ScriptFile  = Get-CallingFileName
+  $global:ScriptPath  = if ($x = Get-CallingFileName) { Split-Path $x } else { ScriptDir }
+  $global:upath = "$ModuleDir\MBMod\0.3\users.xlsx"
+  $global:cpath = "$ModuleDir\MBMod\0.3\comps.xlsx"
+  $global:DesktopPath = [Environment]::GetFolderPath("Desktop")
+  $global:PatternSID  = 'S-1-5-21-\d+-\d+\-\d+\-\d+$'
+
+  #"Mß v1.3"
+}
+
+function Main {
+ $global:ScriptPath = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
+}
+
+Main
+
+function Test-BCS {
+$OutFile = "Central Park Checks $(get-date -Format 'yyyy-MM-dd HH-mm').xlsx" 
+$OutPath = '\\DRSITSRV1\DRSsupport$\Daily Checks\Completed Central Park Checks'
+
+Test-Modules;
+$path = Join-Path $OutPath $OutFile
+"Output to excel file $path"
+
+$inCP = Get-ADComputer -Filter * -SearchBase 'OU=DRS Central Park,OU=DRS Win 10 PCs,DC=dealers,DC=aib,DC=pri' -Properties description,location
+$all  = Get-ADComputer -Filter * -Properties description,location
+$list = $inCP.name  #(Get-ADComputer -Filter { OperatingSystem -NotLike "*server*" } ).name
+
+rv ii -ErrorAction SilentlyContinue 
+
+$out = foreach ($pc in $list) {
+  MyProgress $pc $list.count
+  [PSCustomObject]@{ 
+    PC = $pc;
+    AD = $ad = $pc -in $all.name   
+    #SCCM = $sccm = if ((Get-CMCollectionOfDevice $pc) -like "*does not exist in Site*") {$false} else {$true}
+    Ping = $ping = [bool](APing $pc)
+    WMI =  $wmi = if ($ping) {[bool](Check-WMI $pc -timeout 5)} else {$false}
+    Pass = $AD -and $Ping -and $wmi 
+    Location = ($all | ? { $_.name -eq $pc }).Location
+    Description = ($all | ? { $_.name -eq $pc }).Description
+  }
+}
+
+$out | ft
+"$(($out.pass -eq $true).count) out of $($list.count)"
+$out | ? { ! $_.pass } | ft
+$global:BCS = $out
+
+#$c1 = New-ExcelChartDefinition -YRange "PC" -XRange "Pass" -Title "Total"  -NoLegend -Height 225 -Row 9  -Column 15
+$o = Export-Excel -PassThru -NoNumberConversion Name -Path $path -InputObject ($out | select PC,Pass) -TableName 'Summary' -WorksheetName 'Summary' -FreezeTopRow -BoldTopRow -AutoSize -CellStyleSB { param($workSheet)  $WorkSheet.Cells.Style.HorizontalAlignment = "Left" } #`-Barchart -ExcelChartDefinition $c1
+Add-ConditionalFormatting -Worksheet $o.Summary -Range "B2:B52" -RuleType ContainsText -ConditionValue "TRUE" -ForegroundColor Green -BackgroundColor LightGreen
+Add-ConditionalFormatting -Worksheet $o.Summary -Range "B2:B52" -RuleType ContainsText -ConditionValue "FALSE" -ForegroundColor Red -BackgroundColor LightPink
+$o.Summary.Cells["D1"].Value = "$(($out.pass -eq $true).count)"
+$o.Summary.Cells["E1"].Value = "out of"
+$o.Summary.Cells["F1"].Value = "$($list.count)"
+if (($out.pass -eq $true).count -eq $list.count) { $color = [System.Drawing.Color]::LightGreen } else { $color = [System.Drawing.Color]::LightPink } 
+Set-ExcelRange -Worksheet $o.Summary -Range "D1:F1" -BackgroundColor $color 
+$o.Summary.Cells["H1"].Value = 'Date'
+$o.Summary.Cells["H2"].Value = 'Tested By'
+$o.Summary.Cells["H3"].Value = 'Manager Signed'
+$o.Summary.Cells["I1"].Value = (Get-Date -format g)
+$x=(Get-aduser ($env:USERNAME -replace 'dsk_' -replace 'adm_'))
+$o.Summary.Cells["I2"].Value =  "$($x.GivenName) $($x.Surname)"
+Set-ExcelRange -Worksheet $o.Summary -Range "H1:H3" -BackgroundColor SkyBlue -BorderAround Thin 
+Set-ExcelRange -Worksheet $o.Summary -Range "H1:I3" -BorderAround Thin
+Set-ExcelRange -Worksheet $o.Summary -Range "H1:I2" -BorderAround Thin -AutoSize
+$o.Summary.Cells.AutoFitColumns()
+$o.Summary.Cells["D1:F1"].AutoFitColumns(3)
+$o = Export-Excel -ExcelPackage $o -WorksheetName "Details" -InputObject $out -Show -TableName 'Details' -FreezeTopRow -BoldTopRow -AutoSize -PassThru
+Add-ConditionalFormatting -Worksheet $o.Details -Range "B2:E52" -RuleType ContainsText -ConditionValue "TRUE" -ForegroundColor Green -BackgroundColor LightGreen
+Add-ConditionalFormatting -Worksheet $o.Details -Range "B2:E52" -RuleType ContainsText -ConditionValue "FALSE" -ForegroundColor Red -BackgroundColor LightPink
+if ($show) { Export-Excel -ExcelPackage $o -Worksheet $o.Details -Show -AutoSize }
+  else { Export-Excel -ExcelPackage $o -Worksheet $o.Details -AutoSize }
+
+# ii $OutPath
+}
+
+function Get-UTime { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+
+function SetCursor($x, $y) { $Host.UI.RawUI.CursorPosition = @{x=$x; y=$y} }
+
+function GetCursor { $Host.UI.RawUI.CursorPosition -split ',' }
+
+function Wysw($x,$y,$text,$ftime=75,$color) {
+  $ox,$oy = GetCursor
+  SetCursor $x $y
+  if ($color) { Write-Host $text -NoNewline -ForegroundColor $color } 
+   else { Write-Host $text -NoNewline }
+  SetCursor $ox $oy
+}
+
+function Zegar {
+ Wysw 60 1 $(Get-Date -F 'HH:mm:ss') 
+}
+
+function Spinner($x,$y,$speed=75) {
+ $anim="|/-\".ToCharArray(); 
+ $i = [Math]::Round((Get-UTime)/$speed,0) % $anim.count
+ $ox,$oy = $Host.UI.RawUI.CursorPosition -split ','
+ $Host.UI.RawUI.CursorPosition = @{x=$x; y=$y}
+ write-host "$($anim[$i])`b" -NoNewline -ForegroundColor Green
+ $Host.UI.RawUI.CursorPosition = @{x=$ox; y=$oy}
+}
+
+function Test-ADCMWsusEpo {
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { 'Please start script with administrator right';pause;exit}
+
+$w = Get-WsusServer -Name drsopsmgr3 -PortNumber 8530
+$WSUS = Get-WsusComputer -UpdateServer $w | ? {$_.ComputerRole -eq 'Workstation'}
+$WSUSList = ($WSUS.FullDomainName -replace '.dealers.aib.pri').ToUpper()
+
+$w2 = Get-WsusServer -Name drscmsrv2 -PortNumber 8530
+$WSUS2 = Get-WsusComputer -UpdateServer $w2 | ? {$_.ComputerRole -eq 'Workstation'}
+$WSUSList2 = ($WSUS2.FullDomainName -replace '.dealers.aib.pri').ToUpper()
+
+Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1" -ErrorAction SilentlyContinue -Force; cd "DUB:\"
+$CM =  Get-CMDevice | ? {$_.IsClient} | select name,LastActiveTime,MACAddress
+$CMList = $CM.name.ToUpper(); C:
+$AD = (Get-ADComputer -Filter { OperatingSystem -NotLike "*server*" } -Properties Description,CanonicalName,MemberOf,Location) | ? {$_.name -ne 'DRSVCENTRE'} | select *
+$ADList = $AD.Name.ToUpper()
+$last_ePO_file = Get-Item "G:\documentation and procedures\Vulnerability Management\EPO 30 Day Reviews\EPO_*.csv" | sort CreationTime -Descending | select -first 1 
+
+$Epo = Import-Csv $last_ePO_file | ? { $_.'OS Platform' -eq 'Workstation'} | 
+     % { $lc = $_.'Last Communication' -replace ' BST' -replace ' GMT'; 
+        [PSCustomobject]@{ System='ePO'; Name=$_.'System Name'; LastComm =  if ($lc -match "AM|PM") { [datetime]$lc } else {[datetime]::ParseExact($lc,"dd/MM/yy HH:mm:ss",$null)  }
+          Data=$_.'IP address'; User=$_.'User Name'; Managed=$_.'Managed State'; VerAgent=$_.'Product Version (Agent)'; VerEndpoint=$_.'Product Version (Endpoint Security Platform)'; OS=$_.'OS Platform'} }
+$EpoList = $Epo.Name  
+ 
+$Total = $ADList + $CMList + $WSUSList + $EpoList | select -Unique
+$all = $global:DRS = $Total | % { 
+    $pc = $_; 
+    $iad =  ($AD | ? {$_.Name -like "*$pc*"}); 
+    $iepo = ($Epo | ? {$_.Name -like "*$pc*"}); 
+    $icm =  ($CM | ? {$_.Name -like "*$pc*"}); 
+    $iwsus = ($wsus | ? {$_.FullDomainName -like "*$pc*"})
+[PSCustomObject]@{ PC=$pc;  Desc = $iad.Description 
+  WSUS_LastComm = $wsus_lc = $iwsus.LastReportedStatusTime;
+  EPO_LastComm  = $epo_lc = $iepo.LastComm;
+  CM_LastComm = $icm.LastActiveTime
+  IP =  if ($wsus_lc -gt $epo_lc) {$iwsus.IPAddress} else {$iepo.Data}
+  MAC = $icm.MACAddress
+  MemberOf = $iad.MemberOf -replace "CN=|,DC=dealers,DC=aib,DC=pri|,OU=SCCM Computer Groups|,OU=Dublin|,OU=BCM" -join ', '
+  Cannon = $iad.CanonicalName -replace "dealers.aib.pri|$pc"
+  AD=($_ -in $ADList); CM=($_ -in $CMList); WSUS=($_ -in $WSUSList); ePO=($_ -in $EpoList); 
+} } 
+
+[array]$comps = $global:DRSreport = $all | ? { !$_.Ad -or ! $_.CM -or ! $_.ePO -or ! $_.WSUS -or
+                             $_.WSUS_LastComm -lt (Get-Date).AddDays(-10) -or
+                             $_.EPO_LastComm  -lt (Get-Date).AddDays(-10) -or
+                             $_.CM_LastComm   -lt (Get-Date).AddDays(-10) } | select * 
+$comps = ($comps | sort pc | ft | Out-String).Trim()
+
+if (-not $comps) { $comps = 0 }                    
+$out = @"
+Number of PCs in AD   : $($ADList.Count)
+Number of PCs in CM   : $($CMList.Count)
+Number of PCs in ePO  : $($EpoList.Count)
+Number of PCs in WSUS : $($WSUSList.Count)
+
+Computers that have not called in to the systems for more than 10 days or are missing from any of the systems
+$($comps | Out-String)
+
+"@
+$out 
+
+if ($nosave) { break }
+$fname = "G:\documentation and procedures\Vulnerability Management\EPO 30 Day Reviews\Dealers_report_$(Get-Date -Format 'yyyy-MM-dd_HH-mm')"
+$out | Out-File "$fname.txt"
+#$all | Export-Csv "$fname.csv" -NoTypeInformation
+Export-xlsx $all "$fname.xlsx" 
+"$fname.txt"
+
+# ii "G:\documentation and procedures\Vulnerability Management\EPO 30 Day Reviews\"
+}
+
+function Close-File($pc='DrsCorpSrv2',$name="*xls*"){
+#*Activity Report
+ $cred = Get-Credential adm_58691
+ $opt = New-CimSessionOption -Protocol DCOM
+ $s = New-CimSession -Computername $pc -SessionOption $opt -ErrorAction Stop -Credential $cred
+
+ Get-SmbOpenFile -CimSession $s | ? { $_.Path -like $name } #| Close-SmbOpenFile 
+
+ Remove-CimSession $s 
+}
+
+function SIDtoUser($SID){
+ $SID.Translate([System.Security.Principal.NTAccount])
+}
+
+function Get-Licence($pc,$app='Windows%') {
+ $opt = New-CimSessionOption -Protocol DCOM
+ $s = New-CimSession -Computername $pc -SessionOption $opt -ErrorAction Stop
+ Get-CimInstance SoftwareLicensingProduct -CimSession $s -Filter "Name like '$app'" | where { $_.PartialProductKey } | select *
+ Remove-CimSession $s 
+}
+
+function Get-DNSsuffix($pc) {
+$opt = New-CimSessionOption -Protocol DCOM
+$s = New-CimSession -Computername $pc -SessionOption $opt -ErrorAction Stop
+Get-DnsClient -CimSession $s | ft
+Get-DnsClientServerAddress -CimSession $s | ft
+Remove-CimSession $s 
+}
+
+function WSUS-ForceUpdate{
+ $updateSession = new-object -com "Microsoft.Update.Session"; $updates=$updateSession.CreateupdateSearcher().Search($criteria).Updates
+ #Running this commands will "prime" the Windows Update engine to submit its most recent status on the next poll.  To trigger that next poll, use:
+ wuauclt /reportnow
+}
+
+function EnableADAL($pc,$usr) {
+ test-path "\\$pc\c$\users\$usr\ntuser.dat"
+ (isLogged $pc).user
+ reg load "HKU\$pc-$usr" "\\$pc\c$\users\$usr\ntuser.dat"
+ Set-ItemProperty "Registry::HKEY_USERS\$pc-$usr\SOFTWARE\Microsoft\Office\16.0\Common\Identity" -Name EnableADAL -Value 1 -Verbose
+ $null = REG UNLOAD "HKU\$pc-$usr"
+}
+
+function Get-PhysicalDiskR($PC) {
+ $opt = New-CimSessionOption -Protocol DCOM
+try {
+ $s = New-CimSession -Computername $pc -SessionOption $opt -ErrorAction SilentlyContinue 
+ Get-PhysicalDisk -CimSession $s
+ Remove-CimSession $s 
+  } catch { $false } 
+}
+
+<#
+ADinfo
+$l = Ping-DealersPCs
+$out = $l |% { $_; $temp=(Get-PhysicalDiskR $_); [PSCustomObject]@{ PC = $_; MediaType=$temp.MediaType; FriendlyName=$temp.FriendlyName; SerialNumber=$temp.SerialNumber; Size=$temp.Size  } }
+Export-Desktop $out 'SSD'
+#>
+
+function KMS($pc) {  #/ckms
+  $all = cscript.exe "$env:SystemRoot\System32\slmgr.vbs" "$pc" /dli
+  $LicStatus = (($all | ? { $_ -match 'Volume activation expiration:'}) -split ':')[1].Trim()
+  $KMS = (($all | ? { $_ -match 'Registered KMS machine name:'}) -split ':')[1].Trim()
+  $KMS_DNS = (($all | ? { $_ -match 'KMS machine name from DNS:'}) -split ':')[1].Trim()
+    # return an object
+    [PsCustomObject]@{
+        ComputerName  = $pc
+        LicenseStatus = $LicStatus
+        KMS           = $KMS
+        minutes       = ($LicStatus -split ' ')[0]
+        KMS_DNS       = $KMS_DNS
+        all           = $all -join "`n`t"
+    }
+}
+
+function Get-Model($pc) {
+ (Get-WmiObject Win32_ComputerSystem -ComputerName $pc).Model
+}
+
+function Get-EdgeDriver($dir='C:\Selenium\src'){
+ #[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+ $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{56EB18F8-B008-4CBD-B6D2-8C97FE7E9062}'
+ $version = (Get-ItemProperty -Path $key -Name pv).pv
+ $ver = ($version -split '\.')[0]
+ $type = 'edgedriver_win64'
+ $url = "https://msedgedriver.azureedge.net/$version/$type.zip"
+ Invoke-WebRequest -Uri $url -OutFile "$dir\$type.zip"
+ Expand-Archive -LiteralPath "$dir\$type.zip" -DestinationPath "$dir\$ver"
+ Remove-Item "$dir\$type.zip"
+}
+
+function Get-DesktopUpdates { # Save-MSCatalogUpdate
+  Test-Modules
+  Set-Proxy 1
+  Sleep -Seconds 1
+  $Last30Days = {$_.LastUpdated -gt (Get-Date).AddDays(-20)}
+  $d =  @(Get-MSCatalogUpdate -Search "Cumulative*Windows 10*22H2*x64" -Strict -ExcludePreview | ? { $_.Title -notlike "*Dynamic*" -and  $_.Title -notlike "*4.8.1*" } | ? $Last30Days)
+  $d += Get-MSCatalogUpdate -Search "Update*2016*32" -Strict | ? $Last30Days
+  $d += Get-MSCatalogUpdate -Search "Update*2016*64" -Strict | ? $Last30Days
+  $d | sort Title -Unique | tee -Variable global:kbs 
+  Set-Proxy 0
+}
+
+function Get-ServerUpdates {
+ Test-Modules
+ Set-Proxy 1
+ Sleep -Seconds 1
+ $Last30Days = {$_.LastUpdated -gt (Get-Date).AddDays(-30)}
+ $o  = @( Get-MSCatalogUpdate -Search (Get-Date –f yyyy-MM) -AllPages | ? $Last30Days )
+ $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2012 R2" -AllPages | ? $Last30Days 
+ $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2016" -AllPages | ? $Last30Days 
+ $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2019" -AllPages | ? $Last30Days
+ $o += Get-MSCatalogUpdate -Search "Security Monthly Quality Rollup" -AllPages | ? $Last30Days
+ #$o += Get-MSCatalogUpdate -Search "SQL" -AllPages  | ? $Last30Days
+ $o += Get-MSCatalogUpdate -Search "Servicing Stack Update for Windows Server*x64" -Strict -SortBy Products -AllPages | ? $Last30Days
+ $o | ? { $_.Products -in @("Windows Server 2012 R2","Windows Server 2016","Windows Server 2019")} | sort Title -Unique | sort Products | tee -Variable global:SrvKB
+ Set-Proxy 0
+}
+
+function Calypso-pack {
+Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); cd "DUB:\"
+<#
+unpack to cmsrv
+run prep calypso on folders
+add HomeUserFolder
+add current prop file
+add TRXX.txt for detection method
+create a package in sccm
+distribute
+deploy to test calypso pc
+same for TRxx_hex and add jstack2.bat to bin and start jstack2.bat to Navigator(Pre)Prod.bat
+#>
+
+}
+
+function New-MSPapp($a){
+ $YearMonth = Get-Date –f yyyy-MM; $qtr = [math]::Ceiling((Get-Date).Month/3) 
+ $path = "\\drscmsrv2\e$\SoftwarePackages\Monthly Patches\$YearMonth"
+ $CMFolder = "DUB:\Application\_Security Update"
+ cd c:
+ $files = gci $path\*.msp -Recurse 
+ foreach ($file in $files) {
+  $i = ($file.name | Select-String "^(KB\d+)-(\d{4})-(\d{2})-(\w+)-x-none").Matches.Groups.value 
+  $Info = "$($i[1])-$($i[2])-$($i[4])"
+  $Appname = "$(Get-date -f "yyyy-MM")-$Info"; "`n$Appname-$($i[3])"
+  $bitness = if ($i[3] -eq 32) {'x86'} else {'x64'}
+  Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); Set-Location -Path "DUB:\"
+ $newApp = @{ Name        = "$Appname"
+              Description = $file.name 
+              Publisher   = 'Microsoft'
+              SoftwareVersion = "$YearMonth" }
+ $app = Get-CMApplication -Name $Appname
+ if (!($app)) { $app = New-CMApplication @newApp } else { 'App exists '}
+ $app | Select LocalizedDisplayName, LocalizedDescription
+$script = @'
+$KBNumber = "KB_Number"
+$bits = "Bit_Number"
+$RegPath = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
+If (${Env:ProgramFiles(x86)}){$RegPath += "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall"}
+$KBList = Get-ChildItem -Path $RegPath -Recurse | Get-ItemProperty | Where-Object {$_.DisplayName -like "*$KBNumber*$bits*"} 
+If ($KBList){$KBList | % {Write-Host `n"$($_.DisplayName) found!"}}
+'@ -replace 'KB_Number',$i[1] -replace "Bit_Number",$i[3]
+ $addMsp = @{ ApplicationName    = $Appname
+              DeploymentTypeName = "DT_$Appname-$($i[3])"
+              InstallCommand     = "msiexec.exe /p $($file.Name) /qn"
+              ContentLocation    = "$($file.Directory)"
+        InstallationBehaviorType = 'InstallForSystem'
+            EstimatedRuntimeMins = 10
+            LogonRequirementType = 'WhetherOrNotUserLoggedOn'
+              ScriptLanguage     = 'PowerShell'
+              ScriptText         = $script
+              Comment            = "$(get-date) - $($file.Name)"
+              AddRequirement     = Get-CMGlobalCondition -Name "*Office bitness*" | New-CMRequirementRuleCommonValue -Value1 $bitness -RuleOperator IsEquals
+ }
+ if (!(Get-CMDeploymentType -InputObject $app -DeploymentTypeName $addMsp.DeploymentTypeName)) {
+  Add-CMScriptDeploymentType @addMsp | Select LocalizedDisplayName, LocalizedDescription
+  if ($file.name -notin $app.LocalizedDescription) { Set-CMApplication -InputObject $app -Description "$($app.LocalizedDescription), $($file.name)" }  } else {'Deployment exists'}
+ if (-not (Test-Path "$CMFolder\$YearMonth")) { New-CMFolder -Name $YearMonth -ParentFolderPath $CMFolder }
+ Move-CMObject -FolderPath "$CMFolder\$YearMonth" -InputObject $app 
+ $app = Get-CMApplication -Name $Appname
+ if ((Get-CMDistributionStatus -Id ($app.PackageID) -ErrorAction SilentlyContinue).Targeted -eq 0) {
+  Start-CMContentDistribution -InputObject $app -DistributionPointName 'drscmsrv2.dealers.aib.pri' -ErrorAction SilentlyContinue }
+ }
+}
+
+function New-MSUapp {
+# net use Y: \\drscmsrv2\e$ /USER:adm_58691 *
+$YearMonth = Get-Date –f yyyy-MM; $qtr = [math]::Ceiling((Get-Date).Month/3) 
+$path = "\\drscmsrv2\e$\SoftwarePackages\Monthly Patches\$YearMonth"
+$CMFolder = "DUB:\Application\_Security Update"
+
+cd c:
+$files = gci $path\*.msu -Recurse #| select -First 2  
+foreach ($file in $files) {
+ $i = ($file.name | Select-String "^windows10.0-(KB\d+)-(x\d{2})").Matches.Groups.value ; $i
+ $cunet = if ($file.name -match "ndp\d{2}") {'NET'} else {'CU'}
+ $info = "$($i[1])-$($i[2])-$cunet"
+ $Appname = "$(Get-date -f "yyyy-MM")-$Info"; "`n"+$Appname
+ Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); cd "DUB:\"
+ $newApp = @{ Name        = "$Appname"
+              Description = $file.name
+              Publisher   = 'Microsoft'
+              SoftwareVersion = "$YearMonth $info" }
+ $app = Get-CMApplication -Fast -Name $Appname
+ if (!($app)) { $app = New-CMApplication @newApp }
+ $app | Select LocalizedDisplayName, LocalizedDescription
+ $script = 'get-hotfix | Where-Object {$_.HotFixID -match "'+$i[1]+'"}'
+ $addMsu = @{ ApplicationName    = "$Appname"
+              DeploymentTypeName = "DT_$Appname"
+              InstallCommand     = "$($file.Name) /quiet"
+              ContentLocation    = "$($file.Directory)"
+        InstallationBehaviorType = 'InstallForSystem'
+           EstimatedRuntimeMins  = 10
+            LogonRequirementType = 'WhetherOrNotUserLoggedOn'
+            ScriptLanguage       = 'PowerShell'
+            ScriptText           = $script
+            Comment              = "$(get-date) - $($file.Name)"
+  }
+if (!(Get-CMDeploymentType -InputObject $app -DeploymentTypeName $addMsu.DeploymentTypeName)) {
+   Add-CMScriptDeploymentType @addMsu | Select LocalizedDescription, LocalizedDisplayName
+   Set-CMApplication -InputObject $app -Description "$($app.LocalizedDescription), $($file.name)" }
+if (-not (Test-Path "$CMFolder\$YearMonth")) { New-CMFolder -Name $YearMonth -ParentFolderPath $CMFolder }
+ Move-CMObject -FolderPath "$CMFolder\$YearMonth" -InputObject $app 
+ Start-CMContentDistribution -InputObject $app -DistributionPointName 'drscmsrv2.dealers.aib.pri' -ErrorAction SilentlyContinue 
+ }
+}
+
+function Save-NewUpdate($path = "C:\Temp\updates") {
+  if (-not (Test-Path $path)) { mkdir $path }
+  Set-Proxy 1
+  $u = (Get-DesktopUpdates)
+  Set-Proxy 1
+  $u | % { Save-MSCatalogUpdate $_ $path -AcceptMultiFileUpdates -UseBits -ErrorAction SilentlyContinue } 
+  Set-Proxy 0
+}
+
+function ExtractCabsFolder ($CabFolder='C:\Temp\updates'){
+ $files = gci "$CabFolder\*.cab"
+ cd $CabFolder
+ $UpFolder = (Split-Path $CabFolder)
+ New-Item 'MSP' -ItemType Directory -force | Out-Null
+ New-Item 'CabsDone' -ItemType Directory -force | Out-Null
+
+ $msp = $CabFolder + '\MSP' 
+ $CabsDone = $CabFolder + '\CabsDone' 
+ foreach ($f in $files) {
+  New-Item $f.BaseName -ItemType Directory -Force -Verbose | Out-Null
+  $dir = $CabFolder + '\' + $f.BaseName
+  expand $f.Name -F:*.msp $dir | Out-Null
+  $a = gci "$dir\*.msp"
+  if ($a.count -eq 1) { Rename-Item $a.Fullname "$($f.BaseName).msp" | Out-Null }
+  Move-Item "$dir\*.msp" $msp -Force
+  Move-Item "$f" $CabsDone -Force
+  Remove-Item $dir -force 
+ } 
+}
+
+function Move-toCM($path='C:\Temp\updates\') {
+ $YearMonth = Get-Date –f yyyy-MM
+ $qtr = [math]::Ceiling((Get-Date).Month/3) 
+ $pathCM = "\\drscmsrv2\e$\SoftwarePackages\Monthly Patches\$YearMonth"  #$msu = (Get-Item -Path $path\*.msu)
+
+ foreach ($file in $msp = gci $path\*.msp -Recurse ) {  # | select -skip 1 -First 1 $files = gci $path\*.msp -Recurse
+  $i = ($file.name | Select-String "^(KB\d+)-(\d{4})-(\d{2})-(\w+)-x-none").Matches.Groups.value #$winv = ($file.name | Select-String -Pattern "\d{2}H2").Matches.Value.ToUpper()
+  $Info = "$($i[1])-$($i[3])-$($i[2])-$($i[4])"
+  $Appname = "$(Get-date -f "yyyy-MM")-$Info"; "`n"+$Appname
+  md "$pathCM\$info" -Force
+  move $file "$pathCM\$info"
+ }
+
+ foreach ($file in $msu = gci $path\*.msu -Recurse) {
+  $i = ($file.name | Select-String "^windows10.0-(KB\d+)-(x\d{2})").Matches.Groups.value ; $i
+  $cunet = if ($file.name -match "ndp\d{2}") {'NET'} else {'CU'}
+  $info = "$($i[1])-$($i[2])-$cunet"
+  $Appname = "$(Get-date -f "yyyy-MM")-$Info"; "`n"+$Appname
+  md "$pathCM\$info" -Force
+  move $file "$pathCM\$info"
+ }
+}
+
+function New-Test {
+  Save-NewUpdate
+  ExtractCabsFolder
+  Move-toCM
+  New-MSPapp
+  New-MSUapp
+  DeployToGroup
+}
+
+# DeployToGroup -Apps "*KB5002519*" -Collection 'ZeroDay_2024_02' 
+# jesli brak czasu jest as soon as possible
+# DeployToGroup -Collection 'Feb_patches'
+
+function DeployToGroup($Apps="$(Get-Date –f yyyy-MM)-*",$Collection='SCCM Test Group',$Time=(get-date -Hour 22 -Minute 03)) {
+Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); cd "DUB:\"
+ $appsToDeploy = Get-CMApplication -Name $Apps | select -ExpandProperty LocalizedDisplayName 
+ #$appsToDeploy =  $appsToDeploy | ? { $_ -like "*cu*"}
+ $appsToDeploy
+ "Apps will be deployed to $($Collection) - start time $Time , increment 15 min"
+ pause
+ foreach ($app in $appsToDeploy){
+  $NewDep = @{  ApplicationName = $app
+                CollectionName = $Collection
+                AvailableDateTime = $Time
+                #DeadlineDateTime = $Time
+                DeployAction = "Install"                
+                DeployPurpose = "Required"
+                UserNotification = "DisplaySoftwareCenterOnly"
+                SendWakeupPacket = $true
+                AllowRepairApp = $true  
+                PersistOnWriteFilterDevice = $false
+  } 
+ $Time = $Time.AddMinutes(15)
+ New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
+ }
+ c:
+}
+
+function SHowFaultyDeployment {
+ Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"; cd DUB:
+ $appsToDeploy = Get-CMApplication -Fast -Name "2023-10-*"   # | select -ExpandProperty LocalizedDisplayName 
+ $appsToDeploy | % { Get-CMApplicationDeploymentStatus -InputObject $_ } | Get-CMDeploymentStatusDetails  |  % { [PSCustomObject]@{ PC = $_.MachineName; EnforcementState=$_.EnforcementState; AppName=$_.AppName; StatusType=$_.StatusType } } | ? { $_.EnforcementState -ne 1000 } 
+
+}
+
+function Get-NewUpdateSCCM {
+ Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"
+ $SavedPath = $(pwd)
+ cd DUB:
+ Get-CMSoftwareUpdate -fast -DatePostedMin '07/09/2023' -IsLatest $true | 
+  ? {$_.LocalizedDisplayName -like "*2016*32-Bit*" -or $_.LocalizedDisplayName -like "*Windows 10*22H2*x64*" } | 
+  % {  [PSCustomObject]@{ KB = [regex]::match($_.LocalizedDisplayName, 'KB(\d+)').value; Name = $_.LocalizedDisplayName; Description = $_.LocalizedDescription; Date = $_.DatePosted; } } |
+  sort KB
+ cd $SavedPath
+}
+
+function Change-Password{
+#explorer.exe shell:::{2559a1f2-21d7-11d4-bdaf-00c04f60b9f0}
+(New-Object -ComObject "Shell.Application").WindowsSecurity()
+}
 
 function Test-Modules {
   Init
-  $path = "$ScriptPath\modules"
-  if ($ScriptPath -eq $ModulePath2) {$path = Split-Path (Split-Path $ScriptPath)}
+  $path = "$ModuleDir"  #"$ScriptPath\modules"
+  #if ($ScriptPath -eq $ModulePath2) {$path = Split-Path (Split-Path $ScriptPath)}
 
   $modUNC = @{ ImportExcel = "$path\ImportExcel\7.4.1\ImportExcel.psd1"
-   InvokePsExec = "$path\InvokePsExec\1.2\InvokePsExec.psd1"
-                     #MBMod = "$path\MBMod\0.3\MBMod.psm1"
+               MSCatalog   = "$path\MSCatalog\MSCatalog.psd1"
              }
   $ModUNC.keys.ForEach( { If (-not(Get-module $_)) { Import-Module $($ModUNC[$_]) -Global -WA SilentlyContinue } })
 }
@@ -22,6 +673,9 @@ function Test-Modules {
 function ImportMe {
   #iex ${using:function:ImportMe}.Ast.Extent.Text;ImportMe
   Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -WA SilentlyContinue
+  
+  #Import-Module "$ScriptPath\modules\MBMod\0.3\MBMod.psm1" -Force -Global -WarningAction SilentlyContinue
+
   Init
 }
 
@@ -36,22 +690,42 @@ function ScriptDir {
   #$global:GetScriptDir = { if ($psise) {Split-Path $psise.CurrentFile.FullPath} else {$PSScriptRoot} }
 } 
 
-function Init {
-  #$ErrorActionPreference='silentlycontinue'
-  $global:ModulePath  = 'H:\MB\PS\modules\MBMod\0.3\' 
-  $global:ModulePath1 = $PSCommandPath
-  $global:ModulePath2 = (Get-Module -Name mbmod).ModuleBase
-  $global:ScriptFile  =  Get-CallingFileName
-  $global:ScriptPath  = if ($x = Get-CallingFileName) { Split-Path $x } else { ScriptDir }
-  $global:DesktopPath = [Environment]::GetFolderPath("Desktop")
-  $global:PatternSID  = 'S-1-5-21-\d+-\d+\-\d+\-\d+$'
-
-  $global:upath = "$ModulePath\users.xlsx"
-  $global:cpath = "$ModulePath\comps.xlsx"
-  #"Mß v0.9.9"
+function ListWindows{
+Get-Process | Where { $_.MainWindowTitle } | Select-Object ProcessName, MainWindowTitle
 }
 
-function Main {
+function decom($pc){
+ CMinfo
+ Get-CMDevice -Name $pc | Remove-CMDevice; C:
+ $ws = ((Get-ItemProperty HKLM:\Software\Policies\Microsoft\Windows\WindowsUpdate -Name WUServer).WUServer) -split '//|:'
+ $w = Get-WsusServer -Name $ws[2] -PortNumber $ws[3]
+ $c = $w.SearchComputerTargets($pc)
+ $c[0].Delete()
+ Get-ADComputer $pc | Remove-ADObject -Recursive 
+}
+
+function Wsusinfo($server='drsopsmgr3') {
+  $w = Get-WsusServer -Name drsopsmgr3 -PortNumber 8530
+  $global:Wsus_comp = New-Object System.Collections.Generic.List[System.Object]
+  $Wsus_comp = Get-WsusComputer -UpdateServer $w | ? {$_.ComputerRole -eq 'Workstation'}
+  $global:WsusList = ($Wsus_comp.FullDomainName -replace '.dealers.aib.pri').ToUpper()
+}
+
+function CMinfo {
+ Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"
+ Set-Location "DUB:\"
+ $global:CM_comp = (Get-CMDevice | ? {$_.IsClient})
+ $global:CMList = $CM_comp.name.ToUpper()
+}
+
+function SCCM-AppDetection {
+$AppName = "*Microsoft Visual C++ 2015-2022 Redistributable * - 14.36*"
+
+# Get OS-Native registry uninstall path:
+$RegPath = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
+If (${Env:ProgramFiles(x86)}){$RegPath += "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall"}
+$FoundList = Get-ChildItem -Path $RegPath -Recurse | Get-ItemProperty | Where-Object {$_.DisplayName -like "*$AppName*"} 
+If ($FoundList) {$FoundList | % {[PSCustomObject]@{PC=$env:COMPUTERNAME; Name=$_.DisplayName; Ver=$_.DisplayVersion }}}
 
 }
 
@@ -74,6 +748,21 @@ foreach ($File in $objFolder.items()) {
 return $FileMetaData
 }
 
+function Clear-CalypsoOld{
+ADINFO
+$l = Ping-DealersPCs
+$pc = 'CCN7K4J-DUB'
+foreach ($pc in $l){
+  $dir = "\\$pc\C$\Program Files\CalypsoThickClient"
+  $CalypsoDir=(gci $dir -Exclude Java,client)
+  $CalypsoDir.Name
+  #if ($CalypsoDir) { if (Test-Path $dir\Client) { $CalypsoDir.Fullname | % { $local=UncToLocal($_);  Run-Remote $pc "rd ""$local"" /s /q"  } } }
+  $rest = (gci $dir).Name ;
+  [PSCustomObject]@{ PC = $pc; CalypsoDir=$CalypsoDir.Name; Rest=$rest}
+}
+
+}
+
 function Get-Winver($pc) {
  # 10.0.19042 = 20H2      10.0.19044 = 20H2
  $build = (gwmi Win32_OperatingSystem -ComputerName $pc).Version 
@@ -83,6 +772,7 @@ function Get-Winver($pc) {
  if ($build -eq '10.0.19042') { $ver = '20H2' } 
  if ($build -eq '10.0.19043') { $ver = '21H1' } 
  if ($build -eq '10.0.19044') { $ver = '21H2' }
+ if ($build -eq '10.0.19045') { $ver = '22H2' }
  [PSCustomObject]@{ pc=$pc; ver = $ver; build = $build }
 }
 
@@ -100,8 +790,8 @@ function DesktopPath {
 }
 
 function sDate ($text) {
-  if ($text) { "$text - $(Get-Date -Format 'yyyy-MM-dd HH-mm')" }
-  else { "$(get-date -Format 'yyyy-MM-dd HH-mm')" }
+  if ($text) { "$text$(Get-Date -Format 'yyyy-MM-dd_HH-mm')" }
+  else { "$(get-date -Format 'yyyy-MM-dd_HH-mm')" }
 }
 
 function MyTS ($timespan) {
@@ -117,6 +807,10 @@ function Export-Xlsx ($obj, $path) {
   Export-Excel -NoNumberConversion Name -Path "$path" -InputObject $obj -TableName 'Table1' -TableStyle Medium7 -FreezeTopRow -BoldTopRow -AutoSize -CellStyleSB { param($workSheet)  $WorkSheet.Cells.Style.HorizontalAlignment = "Left" } 
 }
 
+function Export-Desktop ($obj,$text) {
+  Export-Xlsx $obj "$(DesktopPath)$(sDate $text'_').xlsx"
+}
+
 function CombineObj ($ObjArray) { 
   $out = [PSCustomObject]@{ } 
   foreach ($o in $ObjArray) {
@@ -130,7 +824,8 @@ function CombineObj ($ObjArray) {
 }
 
 function Set-Proxy($val) {
-  set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value $val
+  Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyServer -Value 'webcorp.prd.aib.pri:8082'
+  Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value $val
 }
 
 function Set-WorkWeekSchedule($ProgramName,$CollectionName,$time) {
@@ -139,18 +834,101 @@ function Set-WorkWeekSchedule($ProgramName,$CollectionName,$time) {
  Get-CMDeployment -ProgramName $ProgramName -CollectionName $CollectionName | Set-CMPackageDeployment -StandardProgramName $ProgramName -Schedule $a  
 }
 
+function Get-RemoteReg ($PC,[Microsoft.Win32.RegistryHive] $HKEY,$Path,$name) {
+try {
+  if ($HKEY -eq 'CurrentUser') { $HKEY = 'Users'
+    $Path="$((Get-RemoteReg $PC -HKEY Users).name | ? { $_ -like "S-1-5-21*"} | ? { $_ -notlike "*_Classes"})\$Path" 
+     Write-Verbose "$PC\$HKEY\$path" 
+  }
+  $regBaseKey = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey($HKEY, $pc)
+  $regKey = $regBaseKey.OpenSubKey($Path)
+  if ($name) { if ($name -eq '(default)') {$name=""};$regKey.GetValue($name) } 
+    else { if ($regkey) { '';$regKey.Name;
+      $regKey.GetSubKeyNames() | sort | % { [pscustomobject]@{Name=$_;Value='SubKey'} }
+      $regkey.GetValueNames() | sort | % {[pscustomobject]@{Name=$_;Type=$regkey.GetValueKind($_);Value=$regkey.GetValue($_)} }
+    } ;''; }
+ $regkey.Close() 
+ } catch { $false } 
+}
+
+function Set-RemoteReg ($PC,[Microsoft.Win32.RegistryHive] $HKEY,$Path,$name,$value,[Microsoft.Win32.RegistryValueKind] $kind) {
+try {
+  if ($HKEY -eq 'CurrentUser') { $HKEY = 'Users'
+    $Path="$((Get-RemoteReg $PC -HKEY Users).name | ? { $_ -like "S-1-5-21*"} | ? { $_ -notlike "*_Classes"})\$Path" 
+     Write-Verbose "$PC\$HKEY\$path" 
+  }
+  $regBaseKey = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey($HKEY, $pc)
+  $regKey = $regBaseKey.OpenSubKey($Path,$true)
+  $regKey.SetValue($name,$value)
+  $regkey.Close()
+  } catch { $false } 
+}
+
+function Set-RemoteRegRecursive ($PC,[Microsoft.Win32.RegistryHive] $HKEY,$Path,$name,$value,[Microsoft.Win32.RegistryValueKind] $kind) {
+try {
+  if ($HKEY -eq 'CurrentUser') { $HKEY = 'Users'
+    $Path="$((Get-RemoteReg $PC -HKEY Users).name | ? { $_ -like "S-1-5-21*"} | ? { $_ -notlike "*_Classes"})\$Path" 
+     Write-Verbose "$PC\$HKEY\$path" 
+  }
+  $reg = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey($HKEY,$PC)
+  $path -split '\\' | % {
+    $reg.CreateSubKey("$_",$true)
+    $reg = $reg.OpenSubKey("$_",$true) 
+  }
+  $reg.SetValue($name,$value,$kind)
+  $reg.Close()
+  } catch { $false } 
+}
+
+function UncToLocal($path){
+ $path -replace '(?:.+)\\([a-z])\$\\','$1:\'
+}
+
+function UncToLocal2($path){
+$Drive = [System.IO.Path]::GetPathRoot($path)
+$Dumps = $path.Substring($Drive.Length)
+$Drive = $Drive.Substring($Drive.LastIndexOf('\') + 1).Replace('$',':')
+$NTFSPath = "$Drive$Dumps"
+}
 
 function Run-Remote($Pc,$Cmd,$Timeout=3,$CurrentDir=’C:\temp’) {
+ if (!(Aping $pc)) {'Offline';break}
  $opt = New-CimSessionOption -Protocol DCOM
   try {
     $s = New-CimSession -Computername $pc -SessionOption $opt -OperationTimeoutSec $timeout -ErrorAction Stop  
     Invoke-CimMethod Win32_Process -method Create @{CommandLine="cmd /c $cmd"; CurrentDirectory=$CurrentDir} -CimSession $s
+    Remove-CimSession $s } catch { $false } 
+}
+
+# usage cmd : Run-Remote w10-mb "dir nosuchfile.txt > c:\temp\mm.txt 2>&1"
+# usage ps  : Run-Remote W10-mb "powershell -command ""gci C:\Temp | Out-File C:\temp\aa_ll.txt"" "
+
+function Run-Remote2($Pc,$Cmd,$Timeout=3,$CurrentDir=’C:\temp’) {
+ $opt = New-CimSessionOption -Protocol DCOM
+  try {
+    $s = New-CimSession -Computername $pc -SessionOption $opt -OperationTimeoutSec $timeout -ErrorAction Stop  
+    Invoke-CimMethod Win32_Process -method Create @{CommandLine=$cmd; CurrentDirectory=$CurrentDir} -CimSession $s
     Remove-CimSession $s 
   } catch { $false } 
 }
 
-# usage : Run-Remote w10-mb "dir nosuchfile.txt > c:\temp\mm.txt 2>&1"
 
+<#
+AIB MENU
+$c = "msiexec.exe /qn /i ""C:\Temp\Rocket Passport To PC Host\Passport.msi"" /quiet /qn LICENSE=""DRKV-FG92-1COQ-KB7P"" ALLUSERS=2 USERDATADIR=""C:\Program Files (x86)\PASSPORT\"""
+$pc = "6NS9MM2-DUB"
+Run-Remote $pc $c
+
+#>
+
+function Run-RemoteCred($Pc,$Cmd,$Timeout=3,$CurrentDir=’C:\temp’,$cred) {
+ $opt = New-CimSessionOption -Protocol DCOM
+  try {
+    $s = New-CimSession -Computername $pc -SessionOption $opt -OperationTimeoutSec $timeout -ErrorAction Stop -Credential $cred
+    Invoke-CimMethod Win32_Process -method Create @{CommandLine="cmd /c $cmd"; CurrentDirectory=$CurrentDir} -CimSession $s
+    Remove-CimSession $s 
+  } catch { $false } 
+}
 
 function Run-Remote_WMIold($pc,$cmd) {
  ([WMICLASS]"\\$pc\ROOT\CIMV2:win32_process").Create($cmd).ProcessId
@@ -220,16 +998,36 @@ Function WinTitle($Title) {
   $host.ui.RawUI.WindowTitle = $Title
 }
 
-function RemoveUserProfile($PC,$user){
+function Get-UserProfile($pc) {
  $opt = New-CimSessionOption -Protocol DCOM
  $s = New-CimSession -Computername $PC -SessionOption $opt -ErrorAction Stop
- #Get-CimInstance -Class Win32_UserProfile -CimSession $S | SELECT LocalPath
- Get-CimInstance -Class Win32_UserProfile -CimSession $S | Where-Object { $_.LocalPath.split('\')[-1] -eq $user } | Remove-CimInstance
+ (Get-CimInstance -Class Win32_UserProfile -CimSession $S).LocalPath | % {$_.split('\')[-1]} | ? { $_ -match "\d" }
+}
+
+function Remove-UserProfile($PC,$user){
+ "$pc - $user"
+ $opt = New-CimSessionOption -Protocol DCOM
+ $s = New-CimSession -Computername $PC -SessionOption $opt -ErrorAction Stop
+ $all = (Get-CimInstance -Class Win32_UserProfile -CimSession $S).LocalPath | % {$_.split('\')[-1]} | ? { $_ -match "\d" }
+ if ($user) { Get-CimInstance -Class Win32_UserProfile -CimSession $S | Where-Object { $_.LocalPath.split('\')[-1] -eq $user } | Remove-CimInstance }
+  else { $all }
  Remove-CimSession $s
 }
 
+function Remove-AllUsersProfile($PC){
+ "$pc - List of user profiles"
+ $opt = New-CimSessionOption -Protocol DCOM
+ $s = New-CimSession -Computername $PC -SessionOption $opt -ErrorAction Stop
+ $all = (Get-CimInstance -Class Win32_UserProfile -CimSession $S).LocalPath | % {$_.split('\')[-1]} | ? { $_ -match "\d" }
+ $all
+ pause
+ Get-CimInstance -Class Win32_UserProfile -CimSession $S | Where-Object { $_.LocalPath.split('\')[-1] -in $all } | Remove-CimInstance -Verbose
+ Remove-CimSession $s
+ }
+
 function ADinfo {
   #Write-Debug "Updating AD from servers"
+  Init
   $null = Get-DealersUsers 
   $null = Get-DealersPCs
   Export-Xlsx $ADu $upath 
@@ -272,7 +1070,7 @@ function Get-DealersUsers {
 function Get-DealersPCs {
   $global:ADc = New-Object System.Collections.Generic.List[System.Object]
   $TempC = New-Object System.Collections.Generic.List[System.Object]
-  $TempC.AddRange( (Get-ADComputer -Filter { OperatingSystem -NotLike "*server*" } -prop description,location) )
+  $TempC.AddRange( ((Get-ADComputer -Filter { OperatingSystem -NotLike "*server*" } -prop description,location) | ? { $_.name -ne 'DRSVCENTRE' }) )
   $ex = 'PropertyNames', 'AddedProperties', 'RemovedProperties', 'ModifiedProperties', 'PropertyCount'
   $ADc.AddRange( ($TempC | select * -ExcludeProperty $ex) )
   Remove-Variable TempC
@@ -400,19 +1198,65 @@ Function Check-User ($user) {
   
   $pc = ($out | ? { $_.LoggedNow -eq $user }).Computer
   if (-not $pc) { $pc = $u.Office }
+  if (-not $pc) { $pc = $out.Computer | select -First 1 }
 
-  if ($pc) { $pc | Set-Clipboard; "`n'$pc' has been copied to the clipboard`n" }
-  Menu "Choose option" @('Show Lockout Status', 'Unlock', "Go to $pc", 'New console window', 'Back')
+  if ($pc) { $pc | Set-Clipboard; "`n'$pc' has been copied to the clipboard" }
+  ''
+  Menu "Choose option" @('Show Lockout Status', 'Show users AD groups', "Go to $pc", 'New console window', 'Back')
   '' 
   $inp = Read-Host "[1-5] "
   switch ($inp) {
     '1' { Receive-Job -Name 'LockoutStatus' -Wait | select * -ExcludeProperty RunspaceId,PSSourceJobInstanceId | ft}
-    '2' { "Admin rights needed to unlock account - Unlock-ADAccount $u" }
+    '2' { "`n$($u.Name) is a member of:";Get-UserGroup $u.Name;'' }
     '3' { Check-PC $pc }       # "Set-ADAccountPassword $u -Reset -NewPassword (ConvertTo-SecureString -AsPlainText 'p@ssw0rd' -Force) " }
     '4' { New-PSWin $user }
     '0' { "back to search" }
     Default { "back to search" }
   }
+}
+
+function Check-PC($pc) { # take a look something is taking lots of times sometimes
+    $p = $ADc | ? { $_.Name -eq $pc }
+    $on = APing($pc)
+    $l = Get-LoggedUsers; [array]$LLast = $LoggedUsers | ? { $_.Computer -eq $pc }
+    "`n"*2
+    ($p | select Name,description,DNSHostName | fl | Out-String ).Trim()  
+    if ($on) { 
+        $uptime = Get-BootTimeF $pc
+        $LNow = Logged-User $pc    
+        "Online      : $($on.Address)" 
+        "Up Time     : $uptime"
+        "Logged User : $((isLogged $pc).user) $($LNow.USERNAME)  $($LNow.DisplayName)  $($LNow.'LOGON TIME')  $($LNow.SESSIONNAME)"
+        
+    } else { "Offline !! "};''
+
+    $Opt = @( "Open C: - \\$pc\c$",
+              "Open comand prompt on $pc",
+              "DameWare $pc",
+              "Remote Desktop $pc"
+              'Show computer AD groups',
+              'Wake On Lan',
+              'Ping',
+              'Restart',
+              "Computer Management $pc"
+              'back to search' );
+
+    Menu "Choose option" $Opt 
+    '' 
+    $inp = Read-Host "[1-$($Opt.count)] "
+    switch ($inp) {
+      '1' { ii "\\$pc\c$" }
+      '2' { RemoteCmd $pc }
+      '3' { New-DameWare $pc }
+      '4' { New-MSTSC $pc }
+      '5' { "`n$pc is a member of:";Get-PCgroup $pc;'' }
+      '6' { WOL $pc; New-PingWindow($pc) }
+      '7' { New-PingWindow($pc) }
+      '8' { Restart-Computer $pc -Force; New-PingWindow($pc) }
+      '9' { compmgmt.msc -a /computer=$pc }
+      '0' { "back to search" }
+      Default { "back to search" }
+    }
 }
 
 function New-DameWare($pc) {
@@ -435,50 +1279,6 @@ Get-ADUser -Filter { Surname -like "*" -and memberof -like '*'  } -prop name,giv
  | select name,givenname,surname # | Export-Excel -Path C:\Users\dsk_58691\Desktop\usr.xlsx
 }
 
-function Check-PC($pc) {
-    $p = $ADc | ? { $_.Name -eq $pc }
-    $on = APing($pc)
-    $l = Get-LoggedUsers; [array]$LLast = $LoggedUsers | ? { $_.Computer -eq $pc }
-    "`n"*2
-    ($p | select Name,description,DNSHostName | fl | Out-String ).Trim()  
-    if ($on) { 
-        $uptime = Get-BootTimeF $pc
-        $LNow = Logged-User $pc    
-        "Online      : $($on.Address)" 
-        "Up Time     : $uptime"
-        "Logged User : $($LNow.USERNAME)  $($LNow.DisplayName)  $($LNow.'LOGON TIME')  $($LNow.SESSIONNAME)"
-        
-    } else { "Offline !! "};''
-
-    $Opt = @( "Open C: - \\$pc\c$",
-              "Open comand prompt on $pc",
-              "DameWare $pc",
-              "Remote Desktop $pc"
-              'New PS console window',
-              'Wake On Lan',
-              'Ping',
-              'Restart',
-              "Computer Management $pc"
-              'back to search' );
-
-    Menu "Choose option" $Opt 
-    '' 
-    $inp = Read-Host "[1-$($Opt.count)] "
-    switch ($inp) {
-      '1' { ii "\\$pc\c$" }
-      '2' { RemoteCmd $pc }
-      '3' { New-DameWare $pc }
-      '4' { New-MSTSC $pc }
-      '5' { New-PSWin $pc }
-      '6' { WOL $pc; New-PingWindow($pc) }
-      '7' { New-PingWindow($pc) }
-      '8' { Restart-Computer $pc -Force; New-PingWindow($pc) }
-      '9' { compmgmt.msc -a /computer=$pc }
-      '0' { "back to search" }
-      Default { "back to search" }
-    }
-}
-
 function Get-GraphicDrivers($pc) {
 Get-WmiObject Win32_VideoController -ComputerName $pc | ForEach-Object {
       [PSCustomObject]@{
@@ -486,6 +1286,7 @@ Get-WmiObject Win32_VideoController -ComputerName $pc | ForEach-Object {
         Description   = $_.Description -join ', '
         DriverDate    = [DateTime]::ParseExact($_.DriverDate -replace '000000.000000-000', 'yyyyMMdd', $culture).ToString('yyyy-MM-dd')
         DriverVersion = $_.DriverVersion
+        PNPID         = $_.PNPDeviceID
        # desc          = ($ad | ? { $_.name -eq $pc }).description
       }
     }
@@ -502,8 +1303,6 @@ function Get-ExpiringUsers ($days) {
   #$users | Out-GridView -PassThru -Title "Select users, use CTRL or SHIFT to select many" | SendEmailByOutlook 
   $users
 }
-
-
 
 function Get-LoggedUsers {
   
@@ -563,7 +1362,6 @@ function Logged-User {
       USERNAME = ''; DisplayName = ''; SESSIONNAME = ''; ID = ''; STATE = ''; 'IDLE TIME' = ''; 'LOGON TIME' = '';
       dt = (get-date -Format G)    
     }
-    if ($pc -ne '8P1PJ32-BCS') { 
       if (APing $pc) {
         try {
           $temp = (query user /server:$pc 2>&1)  
@@ -576,14 +1374,12 @@ function Logged-User {
         catch { $o.USERNAME = 'NONE' }
       }
       else { $o.USERNAME = 'OFFLINE' }
-    }
     $o
   }
 }
 
 function isLogged($pc = "$env:COMPUTERNAME") {
 $i = 0; $user = $null; $r = $null
-#if ($pc -eq '8P1PJ32-BCS') { continue }
 if (APing($pc)) {
   try {
     $temp = (query user /server:$pc 2>&1)  
@@ -596,9 +1392,6 @@ if (APing($pc)) {
 } else { $user = 'pcoff' }
 return [PSCustomObject]@{ PC = $pc; User = $user }
 } 
-
-
-
 
 function Get-BootTime ($pc) {
   $opt = New-CimSessionOption -Protocol DCOM
@@ -641,28 +1434,24 @@ function Restart-Unused {
   $restarted | Out-File "$ScriptPath\$(sdate RestartLog).txt" -Append #Stop-Transcript
 }
 
-function Check-Logs {
+function Check-Logs ($pc,$LastHours)  {
   # calculate start time (one hour before now)
-  $Start = (Get-Date) - (New-Timespan -Hours 1)
-  $Computername = $env:COMPUTERNAME 
- 
+  $Start = (Get-Date) - (New-Timespan -Hours $LastHours) 
   # Getting all event logs
-  Get-EventLog -AsString -ComputerName $Computername |
+  Get-EventLog -AsString -ComputerName $pc |
   ForEach-Object {
     # write status info
-    Write-Progress -Activity "Checking Eventlogs on \\$ComputerName" -Status $_
-
+    Write-Progress -Activity "Checking Eventlogs on \\$pc" -Status $_
     # get event entries and add the name of the log this came from
-    Get-EventLog -LogName $_ -EntryType Error, Warning -After $Start -ComputerName $ComputerName -ErrorAction SilentlyContinue |
-    Add-Member NoteProperty EventLog $_ -PassThru 
-       
+    Get-EventLog -LogName $_ -EntryType Error, Warning -After $Start -ComputerName $pc -ErrorAction SilentlyContinue |
+    Add-Member NoteProperty EventLog $_ -PassThru      
   } |
   # sort descending
   Sort-Object -Property TimeGenerated -Descending |
   # select the properties for the report
   Select-Object EventLog, TimeGenerated, EntryType, Source, Message | 
   # output into grid view window
-  Out-GridView -Title "All Errors & Warnings from \\$Computername"
+  Out-GridView -Title "All Errors & Warnings from \\$pc"
 }
 
 function Get-UpdatesRemotly ($pc) {
@@ -751,7 +1540,7 @@ function WOL {
 [CmdletBinding()] Param(
     $CmpName = $Null,
     $CollId = $Null, #"SMS00001"
-    $SiteServer = "drscmsrv1.dealers.aib.pri"
+    $SiteServer = "drscmsrv2.dealers.aib.pri"
 )
  
 Write-Verbose "CmpName = $CmpName"
@@ -816,7 +1605,6 @@ function Convert-ToUnc ($localPath, $pc) {
   [void]( $l = $localPath -replace '^(.):', "\\$pc\`$1$" )
   return $l
 }
-
 
 Function CopyWin {
   [CmdletBinding()]param	( [Parameter(Mandatory = $True)] [string]$Source,
@@ -883,11 +1671,17 @@ function Admin {  #[environment]::GetCommandLineArgs()
  popd
 }
 
+function AdminLL {
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) 
+{ Start-Process powershell.exe -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" ; exit }
+}
+
 function AdminLocal {
   # Working - not from module, copy code to your ps1 file
   if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) 
   { Start-Process powershell.exe -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$(GetUnc $PSCommandPath)`"" ; exit }
 }
+
 function Admin2 {
   If (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
     if ($args.Count -eq 1) { $arguments = '-ExecutionPolicy Bypass -File "' + (GetUnc $args[0]) + '"' }
@@ -936,8 +1730,6 @@ function RemotePopup($pc,$text) {
   Invoke-WmiMethod -Class Win32_Process -ComputerName $pc -Name Create -ArgumentList "C:\Windows\System32\msg.exe * $text"
 }
 
-
-
 function Get-LoggedUser1 {
   # WMI shows only local logins
   param([Parameter(Mandatory = $True, ValueFromPipeline = $True, ValueFromPipelinebyPropertyName = $true)]
@@ -972,7 +1764,6 @@ function Get-LoggedUser2 {
     }
   }
 }
-
 
 function ShortcutUSB {
   $AppLocation = "C:\Windows\System32\rundll32.exe"
@@ -1025,6 +1816,17 @@ function Get-IpByName($PCname) {
 
 function Get-HostByIP($IP) {
   [System.Net.Dns]::GetHostbyAddress($IP) 
+}
+
+function Get-Mac($pc) {
+  Get-WmiObject -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $pc | 
+  Select-Object -Property __SERVER,IPAddress,MACAddress,Description
+}
+
+#static $cred = Get-Credential 
+function Get-MacAdm($pc) {
+  Get-WmiObject -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $pc -Credential $cred |
+  Select-Object -Property __SERVER,IPAddress,MACAddress,Description
 }
 
 function Get-Displays($pc) {
@@ -1120,6 +1922,50 @@ function Trace-Expression {
   }
 }
 
+function Get-InstalledSoftware {
+    <#
+    .SYNOPSIS
+        Retrieves a list of all software installed
+    .EXAMPLE
+        Get-InstalledSoftware
+        
+        This example retrieves all software installed on the local computer
+    .PARAMETER Name
+        The software title you'd like to limit the query to.
+    #>
+    [OutputType([System.Management.Automation.PSObject])]
+    [CmdletBinding()]
+    param (
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$Name
+    )
+
+    $UninstallKeys = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall", "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+    $null = New-PSDrive -Name HKU -PSProvider Registry -Root Registry::HKEY_USERS
+    $UninstallKeys += Get-ChildItem HKU: -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'S-\d-\d+-(\d+-){1,14}\d+$' } | ForEach-Object { "HKU:\$($_.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Uninstall" }
+    if (-not $UninstallKeys) {
+        Write-Verbose -Message 'No software registry keys found'
+    } else {
+        foreach ($UninstallKey in $UninstallKeys) {
+            if ($PSBoundParameters.ContainsKey('Name')) {
+                $WhereBlock = { ($_.PSChildName -match '^{[A-Z0-9]{8}-([A-Z0-9]{4}-){3}[A-Z0-9]{12}}$') -and ($_.GetValue('DisplayName') -like "$Name*") }
+            } else {
+                $WhereBlock = { ($_.PSChildName -match '^{[A-Z0-9]{8}-([A-Z0-9]{4}-){3}[A-Z0-9]{12}}$') -and ($_.GetValue('DisplayName')) }
+            }
+            $gciParams = @{
+                Path        = $UninstallKey
+                ErrorAction = 'SilentlyContinue'
+            }
+            $selectProperties = @(
+                @{n='GUID'; e={$_.PSChildName}}, 
+                @{n='Name'; e={$_.GetValue('DisplayName')}}
+            )
+            Get-ChildItem @gciParams | Where $WhereBlock | Select-Object -Property $selectProperties
+        }
+    }
+}
+
 function Get-InstalledApp2 {
 [cmdletbinding()]            
 param(            
@@ -1192,17 +2038,18 @@ process {
 end {}
 }
 
-
 function Get-InstalledApp {
 [cmdletbinding()]            
 param(            
  [parameter(ValueFromPipeline=$true,ValueFromPipelineByPropertyName=$true)]            
- [string[]]$ComputerName, #(Get-Content list.txt),       #$env:computername,   
+ [string[]]$ComputerName=$env:COMPUTERNAME,   
  [String[]]$Name
 )            
             
 begin {   
- if (-not $ComputerName) { if (-not (Test-path list.txt)) { $ComputerName = (Get-ADComputer -Filter {OperatingSystem -NotLike "*server*"}).name } else { $ComputerName = Get-Content list.txt } }
+ if (-not $ComputerName) { #if (-not (Test-path list.txt)) { $ComputerName = (Get-ADComputer -Filter {OperatingSystem -NotLike "*server*"}).name } else { $ComputerName = Get-Content list.txt } 
+  
+ }
  $UninstallRegKeys=@("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",            
      "SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall")           
 }            
@@ -1233,15 +2080,18 @@ process {
                AppVersion = $AppDetails.GetValue("DisplayVersion");
                 AppVendor = $AppDetails.GetValue("Publisher");
             InstalledDate = $AppDetails.GetValue("InstallDate");
+          InstallLocation = $AppDetails.GetValue("InstallLocation");
+            InstallSource = $AppDetails.GetValue("InstallSource");
+             URLInfoAbout = $AppDetails.GetValue("URLInfoAbout");
              UninstallKey = $AppDetails.GetValue("UninstallString");
                   AppGUID = $AppGUID = $App;
+                   RegKey = $AppRegistryKey -replace '\\\\','\'
      SoftwareArchitecture = if($UninstallRegKey -match "Wow6432Node") {"x86"} else { "x64" }    
   }}}}             
  } else { [PSCustomObject]@{ ComputerName = $Computer.ToUpper(); AppName = 'OFFLINE';} }     
 }}                      
 end {}
 }
-
 
 function Is-Installed {
 [CmdletBinding()]
@@ -1265,7 +2115,7 @@ Function Show-MeBeingSuperBusy {
   Param (
     [Parameter()]
     [ValidateRange(1, 10)]
-    [int]$ConsoleCount = 3
+    [int]$ConsoleCount = 4
   )
     
   Begin {
@@ -1286,13 +2136,30 @@ Function Show-MeBeingSuperBusy {
 }
 
 function ShortKeySetup {
-  Set-PSReadLineKeyHandler -Key ctrl+B -BriefDescription 'show busy' -LongDescription "make it look like I am working" -ScriptBlock {
+  Set-PSReadLineKeyHandler -Key ctrl+B  -BriefDescription 'show busy' -LongDescription "make it look like I am working" -ScriptBlock {
     param($key, $arg)
     #Add-Type -Assembly PresentationCore
     [Microsoft.PowerShell.PSConsoleReadLine]::RevertLine();
     [Microsoft.PowerShell.PSConsoleReadLine]::Insert('Show-MeBeingSuperBusy -ConsoleCount 3; clear;');
     [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine();
   }
+}
+
+function Get-Bios($pc) {
+  $opt = New-CimSessionOption -Protocol DCOM
+  $s = New-CimSession -Computername $pc -SessionOption $opt -ErrorAction Stop
+  Get-CimInstance Win32_bios -CimSession $s
+  Remove-CimSession $s
+}
+
+function Get-Ram($pc) {
+  $opt = New-CimSessionOption -Protocol DCOM
+  $s = New-CimSession -Computername $pc -SessionOption $opt -ErrorAction Stop
+  $total = 0
+  $ram = (Get-CimInstance cim_physicalmemory -CimSession $s | % { [String]($_.Capacity / 1024MB) } )
+  $ram | % {$total = $total + $_ } 
+  Remove-CimSession $s
+  [PSCustomObject]@{ pc = $pc; RAM=$ram -join ','; Total=$total }
 }
 
 function Get-Info {
@@ -1428,7 +2295,7 @@ Function Get-DiskInfo {
 
 function LogonStatus ($computer = 'localhost') {
   $i = 0; $user = $null 
-  try { $user = gwmi -Class win32_computersystem -ComputerName $computer | select -ExpandProperty username -ErrorAction Stop } 
+  try { $user = gwmi -Class win32_computersystem -ComputerName $computer | select * -ExpandProperty username -ErrorAction Stop } 
   catch { $i = 1 }                                                                                      #"Not logged on"
   try { if ((Get-Process logonui -ComputerName $computer -ErrorAction Stop) -and ($user)) { $i = 2 } }   #"Workstation locked"
   catch { if ($user) { $i = 3 } }                                                                       #"Computer In Use"
@@ -1440,7 +2307,7 @@ function APing($PCs) {
   $Task = ForEach ($PC in $PCs) {
     (New-Object System.Net.NetworkInformation.Ping).SendPingAsync($PC, 200, $buffer, @{TTL = 128; DontFragment = $false }) | Add-Member -NotePropertyName Name -NotePropertyValue $pc -PassThru -Force 
   } 
-  [void][Threading.Tasks.Task]::WaitAll($Task,200) 
+  [void][Threading.Tasks.Task]::WaitAll($Task,300) 
   $Task.Where( { $_.result.status -eq 'success' }) | % { $_.result | Add-Member -NotePropertyName Name -NotePropertyValue $_.name -Force -ErrorAction SilentlyContinue; $_.result | select * -ExcludeProperty RoundtripTime,Options,Buffer} 
 }
 
@@ -1481,7 +2348,6 @@ function Loge($text) {
   New-EventLog –LogName Application –Source “MBmod Script” -ErrorAction SilentlyContinue 
   Write-EventLog –LogName Application –Source “MBmod Script” –EntryType Information –EventID 1 –Message $text
 }
-
 
 Function pause1 ($message) {
   if ($psISE) {
@@ -1568,7 +2434,7 @@ function CheckInput {
   do {
     
     $txt = if ($u.Count -lt 2) { "Search " } else { "[1-$($u.count)] or search " }
-    $inp = Read-Host -Prompt $txt
+    $inp = (Read-Host -Prompt $txt).Trim()
     $ok = $False
  #   $Host.UI.RawUI.CursorPosition = $pos
  #   0..$($u.count+5) | %{ $Host.UI.RawUI.CursorPosition = @{X=0;Y=$_} ; $t='     '*30; Write-Host $t }
@@ -2006,6 +2872,58 @@ $pc | % {
 
 }
 
+function Scan-Updates {
+#Using WUA to Scan for Updates Offline with PowerShell  #VBS version: https://docs.microsoft.com/en-us/previous-versions/windows/desktop/aa387290(v=vs.85)  
+
+$path = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
+
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) 
+{ Start-Process powershell.exe -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" ; exit }
+
+if (Test-Path "$path\wsusscn2.cab") { "File $path\wsusscn2.cab exist" } else { "Downloading $path\wsusscn2.cab exist"
+  # Turn on proxy for internet access
+  Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyServer -Value 'webcorp.prd.aib.pri:8082'
+  set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 1 
+  #Invoke-WebRequest -Uri "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -OutFile "$path\wsusscn2.cab"
+  Start-BitsTransfer -Source "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -Destination "$path\wsusscn2.cab"
+  set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 0
+} 
+  
+Write-Output "Adding '$path\wsusscn2.cab' to UpdateServiceManager..." 
+$UpdateSession = New-Object -ComObject Microsoft.Update.Session  
+$UpdateServiceManager  = New-Object -ComObject Microsoft.Update.ServiceManager  
+$UpdateService = $UpdateServiceManager.AddScanPackageService("Offline Sync Service", "$path\wsusscn2.cab", 1)  
+$UpdateSearcher = $UpdateSession.CreateUpdateSearcher()   
+Write-Output "Searching for updates..."  
+$UpdateSearcher.ServerSelection = 3 #ssOthers 
+$UpdateSearcher.IncludePotentiallySupersededUpdates = $true # good for older OSes, to include Security-Only or superseded updates in the result list, otherwise these are pruned out and not returned as part of the final result list 
+$UpdateSearcher.ServiceID = $UpdateService.ServiceID.ToString()  
+$SearchResult = $UpdateSearcher.Search("IsInstalled=0") # or "IsInstalled=0 or IsInstalled=1" to also list the installed updates as MBSA did  
+$Updates = $SearchResult.Updates  
+
+$date = (Get-Date -F "yy-MM-dd HH-mm")
+
+$all = @( $Updates | % { $kb = ($_.Title | Select-String '(?<=\()[^]]+(?=\))' -AllMatches).Matches.Value; [PSCustomObject]@{ KB = $kb; Title = $_.Title  } } ) | sort kb -Descending
+$out = $all | % { $_.kb + "`t" + $_.Title }
+
+if($Updates.Count -eq 0){ "There are no applicable updates." | tee "$path\wsusscan $date.txt"
+ } else { Write-Output "List of applicable items on the machine when using wssuscan.cab:" }
+  
+$out | tee "$path\wsusscan $date.txt" -Append
+
+function Speak($text) {
+  Add-Type -AssemblyName System.speech
+  $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer
+  $speak.Rate = 3
+  $speak.Speak($text) 
+}
+
+if ( (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -eq 1) { Speak "Scan Complete" }  #Speak if we are on workstation
+
+#pause
+
+}
+
 function Get-CMCollectionOfDevice {
     [CmdletBinding()]
     [OutputType([int])]
@@ -2021,13 +2939,13 @@ function Get-CMCollectionOfDevice {
         [Parameter(Mandatory=$false,
                    ValueFromPipelineByPropertyName=$true,
                    Position=1)]
-        [String]$SiteCode = "DRS",
+        [String]$SiteCode = "DUB",
  
         # ConfigMgr SiteServer
         [Parameter(Mandatory=$false,
                    ValueFromPipelineByPropertyName=$true,
                    Position=2)]
-        [String]$SiteServer = "drscmsrv1.dealers.aib.pri"
+        [String]$SiteServer = "drscmsrv2.dealers.aib.pri"
     )
 Begin
 {
@@ -2084,6 +3002,9 @@ function Get-PCgroup($pc){
   (Get-ADPrincipalGroupMembership (Get-ADComputer $pc).DistinguishedName).name 
 }
 
+function Get-UserGroup($user) {
+(Get-ADPrincipalGroupMembership (Get-ADUser $user).DistinguishedName).name
+}
 
 function SCCM-ForceUpd($pc){
 $strAction = "{00000000-0000-0000-0000-000000000121}" # Application Deployment Evaluation Cycle
@@ -2097,6 +3018,14 @@ catch
     { $_.Exception.Message }  
 }
 
+function SCCM-refresh($pc){
+  ([wmiclass]"\\$pc\root\ccm:SMS_Client").TriggerSchedule("{00000000-0000-0000-0000-000000000001}")
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000002}”
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000003}”
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000021}”
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000102}”
+  Invoke-CimMethod -Namespace 'root\ccm' -ClassName 'sms_client' -MethodName TriggerSchedule -Arguments @{sScheduleID="{00000000-0000-0000-0000-000000000002}"}
+}
 
 function Find7050IntelDriver {
 $list = (Get-ADComputer -Filter {OperatingSystem -NotLike "*server*"}).name
@@ -2114,7 +3043,6 @@ $list = (Get-ADComputer -Filter {OperatingSystem -NotLike "*server*"}).name
  Export-Excel -Path "$env:USERPROFILE\Desktop\RAPID.xlsx" -InputObject $all
 }
 
-
 function Replace-Links($pc,$chromelnk) {
  $path1 = "\\$pc\c$\ProgramData\Microsoft\Windows\Start Menu\Programs\Google Chrome.lnk"
  if (compare (gc $chromelnk) (gc $path1)) { Copy-Item -Path $chromelnk -Destination (Split-Path $path1) -Force -Verbose} else { "Correct - $path1" }
@@ -2124,7 +3052,6 @@ function Replace-Links($pc,$chromelnk) {
    if (Test-Path $p) { if (compare (gc $chromelnk) (gc $p)) { Copy-Item -Path $chromelnk -Destination (Split-Path $p) -Force -Verbose} else { "Correct - $p" }  }
  }
 }
-
 
 function WOL-IP {
 $Mac = "D8:9E:F3:13:5C:7B"
@@ -2136,19 +3063,17 @@ $UdpClient.Send($MagicPacket,$MagicPacket.Length)
 $UdpClient.Close()
 }
 
-
-
-function Get-Wsus($ServerName='drsopsmgr2') {
+function Get-Wsus($ServerName='drsopsmgr3') {
   [reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration") | out-null
   [Microsoft.UpdateServices.Administration.AdminProxy]::getUpdateServer($ServerName,$false,8530) 
 }
 
 Function GetUpdateState {
-param([string[]]$kbnumber='KB5016616',[string]$wsusserver='drsopsmgr2',[string]$port=8530
+param([string[]]$kbnumber='KB5041580',[string]$wsusserver='drsopsmgr3',[string]$port=8530
 )
 $report = @()
 [void][reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration")
-$wsus = [Microsoft.UpdateServices.Administration.AdminProxy]::getUpdateServer($wsusserver,$False,8530)
+$wsus = [Microsoft.UpdateServices.Administration.AdminProxy]::getUpdateServer($wsusserver,$False,$port)
 $CompSc = new-object Microsoft.UpdateServices.Administration.ComputerTargetScope
 $updateScope = new-object Microsoft.UpdateServices.Administration.UpdateScope; 
 $updateScope.UpdateApprovalActions = [Microsoft.UpdateServices.Administration.UpdateApprovalActions]::Install
@@ -2173,8 +3098,6 @@ foreach ($kb in $kbnumber){ #Loop against each KB number passed to the GetUpdate
   }
 $report | ?{$_.UpdateInstallationStatus -ne 'NotApplicable' -and $_.UpdateInstallationStatus -ne 'Unknown' -and $_.UpdateInstallationStatus -ne 'Installed' } #|  Export-Csv -Path c:\temp\rep_wsus.csv -Append -NoTypeInformation #Filtering the report to list only computers where the updates are not installed
 } # Usage: GetUpdateState -kbnumber KB5016616 -wsusserver drsopsmgr2 -port 8530
-
-Init;Main
 
 function Get-PcInfo {
 [cmdletbinding()]
@@ -2239,7 +3162,7 @@ if (($build -split '\.')[0] -lt 10) {
 function numInstances([string]$process) {
     @(Get-Process $process -ErrorAction 0).Count
 }
-
+<#
 $Array = @()
 Foreach ($app in $Apps) {
  $Result=[PSCustomObject]@{ Name = $app; IsIns = if ($app) {if ( (Get-InstalledApp $ComputerName "*$app*" | ? { $_.appName -ne 'OFFLINE' } | measure).count -ne 0 ) {$true} else {$false} } }
@@ -2247,9 +3170,8 @@ Foreach ($app in $Apps) {
 }
 showsave(($Array | Format-Table -HideTableHeaders | Out-String).Trim())
 showsave("Tanium process no `t`t: " + $(numInstances("TaniumClient")))
-
+#>
 }
-
 
 function WordFill {
 
@@ -2393,9 +3315,516 @@ Remove-Variable word
 
 }
 
+function Backup-UserProfile {
+$PC = Read-Host -Prompt 'Input your computer name'
+$pc.Trim()
+(Get-WmiObject -ComputerName $pc -Class Win32_UserProfile).LocalPath | % {$_.split('\')[-1]} | ? { $_ -match "\d" }
+$user = Read-Host -Prompt 'Input the user name'
+
+$paths = 
+"\\$pc\C$\Users\$($user)\Desktop\",
+"\\$pc\C$\Users\$($user)\Documents\",
+"\\$pc\C$\Users\$($user)\Favorites\",
+"\\$pc\C$\Users\$($user)\AppData\Roaming\Microsoft\Signatures\",
+"\\$pc\C$\Users\$($user)\AppData\Local\Microsoft\Edge\User Data\Default\Bookmarks",
+"\\$pc\C$\Users\$($user)\AppData\Local\Microsoft\Edge\User Data\Default\Collections\",
+"\\$pc\C$\Users\$($user)\AppData\Roaming\Microsoft\Windows\Recent\AutomaticDestinations\"
+
+$CurrPath = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
+if (Test-Path $paths[0]) {
+  $paths | % { if (Test-Path $_) { $_ ; xcopy $_ "$CurrPath\Backups\$($user)\$(Split-Path -Leaf $_)\" /s /f /q /y}  }
+}
+
+
+}
+
+function DisableIPv6Dealers {
+ Adinfo
+ $list = Ping-DealersPCs
+ $list | % { $val=(Get-RemoteReg $_ LocalMachine 'SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\' 'DisabledComponents')
+ if ($val -ne 255) {(Set-RemoteReg $_ LocalMachine 'SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\' 'DisabledComponents' 255) }
+  [PSCustomObject]@{PC=$_; Reg=(Get-RemoteReg $_ LocalMachine 'SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\' 'DisabledComponents') } }
+}
+
+function Run-CMActions { # SCCM all
+ $CPApplet = New-Object -Comobject CPApplet.CPAppletMgr
+ $Actions  = $CPApplet.GetClientActions()
+ ForEach ($Action in $Actions) {   $Action.PerformAction()  } 
+}
+
+function Get-LastLoggedNonAdmin($pc){
+$AdmDsk = @('drwin','Administrator','58691','10245','53942')
+
+$opt = New-CimSessionOption -Protocol DCOM
+$s = New-CimSession -Computername $PC -SessionOption $opt -ErrorAction Stop
+
+$res = Get-CimInstance –ClassName Win32_UserProfile -Filter "Special = 'False' AND LastUseTime IS NOT NULL" -CimSession $s |
+ Sort-Object -Property LastUseTime -Descending -Unique |
+  Select LocalPath,LastUseTime, @{N='User'; E={$_.LocalPath | % {$_.split('\')[-1]} } } -First 20  #| % {$_.split('\')[-1]} 
+#$res | ? { $_.user -notlike  "dsk_*" -and $_.user -notin $AdmDsk }
+$res | select LocalPath,LastUseTime,user,@{N='DN'; E={(Get-ADUser $_.user -Properties DisplayName).DisplayName} }
+
+Remove-CimSession $s
+
+Get-CimSession | Remove-CimSession
+}
+
+function Copy-MaintanceWindow {
+$mw = Get-CMMaintenanceWindow -CollectionName "All Clients" 
+$mw | % { New-CMMaintenanceWindow -CollectionName "SCCM Group 4" -Name $_.Name -Schedule (Convert-CMSchedule -ScheduleString $_.ServiceWindowSchedules) -ApplyTo Any | select Name,Description,Duration }
+}
+
+function Deploy-File ($PCs,$File,$path="C:\Temp\inst\",$run,$cmd) {
+ $srcfile = split-path $file -Leaf
+ # if (!$cmd)  { $cmd = "C:\Temp\inst\$srcfile" }
+ $pcs | % {
+  $destPath = "\\$_\" + ($path -replace ':','$')
+  if (-not (test-path "$destPath") ) { md $destPath -Verbose}
+  if (-not (test-path "$destPath\$srcfile") ) { Copy-Item $file $destPath -Force -Verbose}
+ }
+}
+
+function Get-PRDGroups([string]$uid){
+$exist = [bool](Get-ADUser -Filter { SamAccountName -eq $uid } -Server prd.aib.pri) 
+if ($exist) {
+  $usr = Get-ADUser -Identity $uid -Properties DisplayName -Server prd.aib.pri
+  "PRD\$($usr.Name) - $($usr.DisplayName)"
+  $all = Get-ADObject -Filter {Name -eq $usr.sid.Value } -Properties msds-principalname,memberof |  
+    % { [PSCustomObject]@{ User= $_.'msds-principalname'; Group=($_.memberof | Get-ADGroup).Name } }
+  $all.Group | % {  [PSCustomObject]@{ User= $all.User; Group=$_ } }
+ } else { "$usr - User not found" }
+}
+
+function Get-DomainFromDist($dist){
+  ($dist -split ",DC=")[1]
+}
+
+function Get-GroupGroups($gr) {
+  $grps = @(Get-ADGroupMember $gr | ? {$_.objectClass -eq 'group'} | ? { $_.Name -notin $temp })
+  foreach ($g in $grps) { $global:temp += $g.Name
+    Write-Progress -Activity "Processing $($g.name)" -Status "Retrieving data .." -PercentComplete (($grps.IndexOf($g)/$grps.Count) * 100)
+    [PSCustomObject]@{ Domain='>> GROUP'; User=$g.Name; DisplayName = ''; Description = ''}  
+    Get-GroupUsers($g.SamAccountName) 
+    Get-GroupGroups($g.SamAccountName) 
+  }
+}
+
+function Get-GroupUsers($gr) {
+  $users = Get-ADGroupMember $gr | ? {$_.objectClass -eq 'user'}
+  foreach ($user in $users) {
+    $domain = Get-DomainFromDist($user.distinguishedName)
+    $uinfo = Get-ADUser $user -Properties DisplayName,Description -Server "$domain.aib.pri"
+    [PSCustomObject]@{ Domain=$domain; User=$user.Name; DisplayName = $uinfo.displayName; Description = $uinfo.Description  }
+ }
+}
+
+function Get-GroupsAll($grp){
+$gr = Get-ADGroup -Filter { Name -eq $grp } -Properties ManagedBy,Description
+$exist = [bool]$gr 
+if ($exist) {
+ $global:temp = @()
+ $all = @(Get-GroupUsers($gr)),(Get-GroupGroups($gr))
+ Write-Progress "Processing " -Completed
+ $currPath = if ($psISE) {Split-Path $psISE.CurrentFile.FullPath} else {$PSScriptRoot} 
+ $filename = "$($grp) - $(get-date -Format 'yyyy-MM-dd HH-mm').txt"
+ $manager =  if ($gr.ManagedBy) { (get-aduser $gr.ManagedBy -Properties DisplayName).DisplayName } else { 'OWNER'}
+ ""
+ "$($gr.Name)`n$($manager)`n$($gr.Description)`n" + ($all | Out-String).TrimEnd() | tee $currPath\$filename
+ "`nExported to file : ..\$filename"
+ } else { "Group not found" } 
+ "" 
+}
+
+
+Function Get-LastLoginInfo {
+#requires -RunAsAdministrator
+<#
+.Synopsis
+    This will get a Information on the last users who logged into a machine.
+    More info can be found: https://docs.microsoft.com/en-us/windows/security/threat-protection/auditing/basic-audit-logon-events
+ 
+.NOTES
+    Name: Get-LastLoginInfo
+    Author: theSysadminChannel
+    Version: 1.0
+    DateCreated: 2020-Nov-27
+ 
+.EXAMPLE
+    Get-LastLoginInfo -ComputerName Server01, Server02, PC03 -SamAccountName username
+ 
+.LINK
+    https://thesysadminchannel.com/get-computer-last-login-information-using-powershell -
+#>
+ 
+    [CmdletBinding(DefaultParameterSetName="Default")]
+    param(
+        [Parameter(
+            Mandatory = $false,
+            ValueFromPipeline = $true,
+            ValueFromPipelineByPropertyName = $true,
+            Position = 0
+        )]
+        [string[]]  $ComputerName = $env:COMPUTERNAME,
+ 
+        [Parameter(
+            Position = 1,
+            Mandatory = $false,
+            ParameterSetName = "Include"
+        )]
+        [string]    $SamAccountName,
+ 
+        [Parameter(
+            Position = 1,
+            Mandatory = $false,
+            ParameterSetName = "Exclude"
+        )]
+        [string]    $ExcludeSamAccountName,
+ 
+        [Parameter(Mandatory = $false)]
+        [ValidateSet("SuccessfulLogin", "FailedLogin", "Logoff", "DisconnectFromRDP")]
+        [string]    $LoginEvent = "SuccessfulLogin",
+ 
+        [Parameter(Mandatory = $false)] [int] $DaysFromToday = 3,
+ 
+        [Parameter(Mandatory = $false)] [int] $MaxEvents = 1024,
+ 
+        [System.Management.Automation.PSCredential] $Credential
+    )
+ 
+    BEGIN {
+        $StartDate = (Get-Date).AddDays(-$DaysFromToday)
+        Switch ($LoginEvent) {
+            SuccessfulLogin   {$EventID = 4624}
+            FailedLogin       {$EventID = 4625}
+            Logoff            {$EventID = 4647}
+            DisconnectFromRDP {$EventID = 4779}
+        }
+    }
+ 
+    PROCESS {
+        foreach ($Computer in $ComputerName) {
+            try {
+                $Computer = $Computer.ToUpper()
+                $Time = "{0:F0}" -f (New-TimeSpan -Start $StartDate -End (Get-Date) | Select -ExpandProperty TotalMilliseconds) -as [int64]
+ 
+                if ($PSBoundParameters.ContainsKey("SamAccountName")) {
+                    $EventData = "
+                        *[EventData[
+                                Data[@Name='TargetUserName'] != 'SYSTEM' and
+                                Data[@Name='TargetUserName'] != '$($Computer)$' and
+                                Data[@Name='TargetUserName'] = '$($SamAccountName)'
+                            ]
+                        ]
+                    "
+                }
+ 
+                if ($PSBoundParameters.ContainsKey("ExcludeSamAccountName")) {
+                    $EventData = "
+                        *[EventData[
+                                Data[@Name='TargetUserName'] != 'SYSTEM' and
+                                Data[@Name='TargetUserName'] != '$($Computer)$' and
+                                Data[@Name='TargetUserName'] != '$($ExcludeSamAccountName)'
+                            ]
+                        ]
+                    "
+                }
+ 
+                if ((-not $PSBoundParameters.ContainsKey("SamAccountName")) -and (-not $PSBoundParameters.ContainsKey("ExcludeSamAccountName"))) {
+                    $EventData = "
+                        *[EventData[
+                                Data[@Name='TargetUserName'] != 'SYSTEM' and
+                                Data[@Name='TargetUserName'] != '$($Computer)$'
+                            ]
+                        ]
+                    "
+                }
+ 
+                $Filter = @"
+                    <QueryList>
+                        <Query Id="0">
+                            <Select Path="Security">
+                            *[System[
+                                    Provider[@Name='Microsoft-Windows-Security-Auditing'] and
+                                    EventID=$EventID and
+                                    TimeCreated[timediff(@SystemTime) &lt;= $($Time)]
+                                ]
+                            ]
+                            and
+                                $EventData
+                            </Select>
+                        </Query>
+                    </QueryList>
+"@
+ 
+                if ($PSBoundParameters.ContainsKey("Credential")) {
+                    $EventLogList = Get-WinEvent -ComputerName $Computer -FilterXml $Filter -Credential $Credential -ErrorAction Stop
+                  } else {
+                    $EventLogList = Get-WinEvent -ComputerName $Computer -FilterXml $Filter -ErrorAction Stop
+                }
+ 
+ 
+                $Output = foreach ($Log in $EventLogList) {
+                    #Removing seconds and milliseconds from timestamp as this is allow duplicate entries to be displayed
+                    $TimeStamp = $Log.timeCReated.ToString('MM/dd/yyyy hh:mm tt') -as [DateTime]
+ 
+                    switch ($Log.Properties[8].Value) {
+                        2  {$LoginType = 'Interactive'}
+                        3  {$LoginType = 'Network'}
+                        4  {$LoginType = 'Batch'}
+                        5  {$LoginType = 'Service'}
+                        7  {$LoginType = 'Unlock'}
+                        8  {$LoginType = 'NetworkCleartext'}
+                        9  {$LoginType = 'NewCredentials'}
+                        10 {$LoginType = 'RemoteInteractive'}
+                        11 {$LoginType = 'CachedInteractive'}
+                    }
+ 
+                    if ($LoginEvent -eq 'FailedLogin') {
+                        $LoginType = 'FailedLogin'
+                    }
+ 
+                    if ($LoginEvent -eq 'DisconnectFromRDP') {
+                        $LoginType = 'DisconnectFromRDP'
+                    }
+ 
+                    if ($LoginEvent -eq 'Logoff') {
+                        $LoginType = 'Logoff'
+                        $UserName = $Log.Properties[1].Value.toLower()
+                    } else {
+                        $UserName = $Log.Properties[5].Value.toLower()
+                    }
+
+                    [PSCustomObject]@{
+                        ComputerName = $Computer
+                        TimeStamp    = $TimeStamp
+                        UserName     = $UserName
+                        LoginType    = $LoginType
+                    }
+                }
+ 
+                #Because of duplicate items, we'll append another select object to grab only unique objects
+                $Output | select ComputerName, TimeStamp, UserName, LoginType -Unique | select -First $MaxEvents
+ 
+            } catch { Write-Error $_.Exception.Message }
+        }
+    }
+    END {}
+}
+
+function Download-Edge {
+
+<#
+.SYNOPSIS
+  Get-EdgeEnterpriseMSI
+
+.DESCRIPTION
+  Imports all device configurations in a folder to a specified tenant
+
+.PARAMETER Channel
+  Channel to download, Valid Options are: Dev, Beta, Stable, EdgeUpdate, Policy.
+
+.PARAMETER Platform
+  Platform to download, Valid Options are: Windows or MacOS, if using channel "Policy" this should be set to "any"
+  Defaults to Windows if not set.
+
+.PARAMETER Architecture
+  Architecture to download, Valid Options are: x86, x64, arm64, if using channel "Policy" this should be set to "any"
+  Defaults to x64 if not set.
+
+.PARAMETER Version
+  If set the script will try and download a specific version. If not set it will download the latest.
+
+.PARAMETER Folder
+  Specifies the Download folder
+
+.PARAMETER Force
+  Overwrites the file without asking.
+
+.NOTES
+  Version:        1.2
+  Author:         Mattias Benninge
+  Creation Date:  2020-07-01
+
+  Version history:
+
+  1.0 -   Initial script development
+  1.1 -   Fixes and improvements by @KarlGrindon
+          - Script now handles multiple files for e.g. MacOS Edge files
+          - Better error handling and formating
+          - URI Validation
+  1.2 -   Better compability on servers (force TLS and remove dependency to IE)
+
+  
+  https://docs.microsoft.com/en-us/mem/configmgr/apps/deploy-use/deploy-edge
+
+.EXAMPLE
+  
+  Download the latest version for the Beta channel and overwrite any existing file
+  .\Get-EdgeEnterpriseMSI.ps1 -Channel Beta -Folder D:\SourceCode\PowerShell\Div -Force
+
+#>
+[CmdletBinding()]
+param(
+  [Parameter(Mandatory = $false, HelpMessage = 'Channel to download, Valid Options are: Dev, Beta, Stable, EdgeUpdate, Policy')]
+  [ValidateSet('Dev', 'Beta', 'Stable', 'EdgeUpdate', 'Policy')]
+  [string]$Channel = 'Stable',
+  
+  [Parameter(Mandatory = $False, HelpMessage = 'Folder where the file will be downloaded')]
+  [ValidateNotNullOrEmpty()]
+  [string]$Folder = 'c:\Temp',
+
+  [Parameter(Mandatory = $false, HelpMessage = 'Platform to download, Valid Options are: Windows or MacOS')]
+  [ValidateSet('Windows', 'MacOS', 'any')]
+  [string]$Platform = "Windows",
+
+  [Parameter(Mandatory = $false, HelpMessage = "Architecture to download, Valid Options are: x86, x64, arm64, any")]
+  [ValidateSet('x86', 'x64', 'arm64', 'any')]
+  [string]$Architecture = "x64",
+
+  [parameter(Mandatory = $false, HelpMessage = "Specifies which version to download")]
+  [ValidateNotNullOrEmpty()]
+  [string]$ProductVersion,
+
+  [parameter(Mandatory = $false, HelpMessage = "Overwrites the file without asking")]
+  [Switch]$Force
+)
+
+$ErrorActionPreference = "Stop"
+$edgeEnterpriseMSIUri = 'https://edgeupdates.microsoft.com/api/products?view=enterprise'
+
+# Validating parameters to reduce user errors
+if ($Channel -eq "Policy" -and ($Architecture -ne "Any" -or $Platform -ne "Any")) {
+  Write-Warning ("Channel 'Policy' requested, but either 'Architecture' and/or 'Platform' is not set to 'Any'. 
+                  Setting Architecture and Platform to 'Any'")
+  $Architecture = "Any"
+  $Platform = "Any"
+} 
+elseif ($Channel -ne "Policy" -and ($Architecture -eq "Any" -or $Platform -eq "Any")) {
+  throw "If Channel isn't set to policy, architecture and/or platform can't be set to 'Any'"
+}
+elseif ($Channel -eq "EdgeUpdate" -and ($Architecture -ne "x86" -or $Platform -eq "Windows")) {
+  Write-Warning ("Channel 'EdgeUpdate' requested, but either 'Architecture' is not set to x86 and/or 'Platform' 
+                  is not set to 'Windows'. Setting Architecture to 'x64' and Platform to 'Windows'")
+  $Architecture = "x64"
+  $Platform = "Windows"
+}
+
+#Write-Host "Enabling connection over TLS for better compability on servers" -ForegroundColor Green
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls -bor [Net.SecurityProtocolType]::Tls11 -bor [Net.SecurityProtocolType]::Tls12
+
+# Test if HTTP status code 200 is returned from URI
+try {  Invoke-WebRequest $edgeEnterpriseMSIUri -UseBasicParsing | Where-Object StatusCode -match 200 | Out-Null}
+catch {  throw "Unable to get HTTP status code 200 from $edgeEnterpriseMSIUri. Does the URL still exist?"}
+Write-Host "Getting available files from $edgeEnterpriseMSIUri" -ForegroundColor Green
+
+# Try to get JSON data from Microsoft
+try {
+  $response = Invoke-WebRequest -Uri $edgeEnterpriseMSIUri -Method Get -ContentType "application/json" -UseBasicParsing -ErrorVariable InvokeWebRequestError
+  $jsonObj = ConvertFrom-Json $([String]::new($response.Content))
+  Write-Host "Succefully retrived data" -ForegroundColor Green
+}
+catch {  throw "Could not get MSI data: $InvokeWebRequestError"}
+
+# Alternative is to use Invoke-RestMethod to get a Json object directly
+# $jsonObj = Invoke-RestMethod -Uri "https://edgeupdates.microsoft.com/api/products?view=enterprise" -UseBasicParsing
+
+$selectedIndex = [array]::indexof($jsonObj.Product, "$Channel")
+
+if (-not $ProductVersion) {
+  try {
+    Write-host "No version specified, getting the latest for $Channel" -ForegroundColor Green
+    $selectedVersion = (([Version[]](($jsonObj[$selectedIndex].Releases |
+            Where-Object { $_.Architecture -eq $Architecture -and $_.Platform -eq $Platform }).ProductVersion) |
+        Sort-Object -Descending)[0]).ToString(4) 
+    Write-Host "Latest Version for channel $Channel is $selectedVersion`n" -ForegroundColor Green
+    $selectedObject = $jsonObj[$selectedIndex].Releases |
+    Where-Object { $_.Architecture -eq $Architecture -and $_.Platform -eq $Platform -and $_.ProductVersion -eq $selectedVersion }
+  }
+  catch {  throw "Unable to get object from Microsoft. Check your parameters and refer to script help." }
+} else {
+  Write-Host "Matching $ProductVersion on channel $Channel" -ForegroundColor Green
+  $selectedObject = ($jsonObj[$selectedIndex].Releases |
+    Where-Object { $_.Architecture -eq $Architecture -and $_.Platform -eq $Platform -and $_.ProductVersion -eq $ProductVersion })
+  if (-not $selectedObject) { throw "No version matching $ProductVersion found in $channel channel for $Architecture architecture."
+  } else { Write-Host "Found matching version`n" -ForegroundColor Green }
+}
+
+
+if (Test-Path $Folder) {
+  foreach ($artifacts in $selectedObject.Artifacts) {
+    # Not showing the progress bar in Invoke-WebRequest is quite a bit faster than default
+    $ProgressPreference = 'SilentlyContinue'   
+    Write-host "Starting download of: $($artifacts.Location)" -ForegroundColor Green
+    # Work out file name
+    $fileName = Split-Path $artifacts.Location -Leaf
+    if (Test-Path "$Folder\$fileName" -ErrorAction SilentlyContinue) {
+      if ($Force) {
+        Write-Host "Force specified. Will attempt to download and overwrite existing file." -ForegroundColor Green
+        try { Invoke-WebRequest -Uri $artifacts.Location -OutFile "$Folder\$fileName" -UseBasicParsing  }
+        catch { throw "Attempted to download file, but failed: $error[0]" }    
+      } else {
+        # CR-someday: There should be an evaluation of the file version, if possible. Currently the function only
+        # checks if a file of the same name exists, not if the versions differ
+        Write-Host "$Folder\$fileName already exists!" -ForegroundColor Yellow
+        do { $overWrite = Read-Host -Prompt "Press Y to overwrite or N to quit."  }
+        # -notmatch is case insensitive
+        while ($overWrite -notmatch '^y$|^n$')
+        if ($overWrite -match '^y$') {
+          Write-Host "Starting Download" -ForegroundColor Green
+          try { Invoke-WebRequest -Uri $artifacts.Location -OutFile "$Folder\$fileName" -UseBasicParsing  }
+          catch { throw "Attempted to download file, but failed: $error[0]"  }
+        } else { Write-Host "File already exists and user chose not to overwrite, exiting script." -ForegroundColor Red
+          exit
+        }
+      }
+    } else {
+      Write-Host "Starting Download" -ForegroundColor Green
+      try { Invoke-WebRequest -Uri $artifacts.Location -OutFile "$Folder\$fileName" -UseBasicParsing   }
+      catch { throw "Attempted to download file, but failed: $error[0]"   }
+    }
+    if (((Get-FileHash -Algorithm $artifacts.HashAlgorithm -Path "$Folder\$fileName").Hash) -eq $artifacts.Hash) {
+      Write-Host "Calculated checksum matches known checksum`n" -ForegroundColor Green
+    }  else {
+      Write-Warning "Checksum mismatch!"
+      Write-Warning "Expected Hash: $($artifacts.Hash)"
+      Write-Warning "Downloaded file Hash: $((Get-FileHash -Algorithm $($artifacts.HashAlgorithm) -Path "$Folder\$fileName").Hash)`n"
+    }
+  }
+} else { throw "Folder $Folder does not exist" }
+Write-Host "-- Script Completed: File Downloaded -- " -ForegroundColor Green
+}
+
+
+
 
 
 <#
+
+
+# getting first domain component value from distinguishedName
+$user.DistinguishedName -replace '^.*?DC=|,DC=.*$'
+
+# constructing domain FQDN from DistinguishedName
+$user.DistinguishedName -replace '^.*?,DC=' -replace ',DC=','.'
+
+# extracting domain FQDN from canonicalname
+$user.CanonicalName -replace '/.*$'
+
+# Getting first Domain component value from canonicalname
+$user.CanonicalName -replace '\..*$'
+
+List a Cm Group
+(Get-CMCollectionMember -CollectionName 'Group 2').name | % { [PSCustomObject]@{PC=$_; Desc=(Get-ADComputer $_ -Properties description).description}  }
+
+Add computer to Collection
+(Get-CMCollectionMember -CollectionName 'Office 2016 group 5').name | % { Add-CMDeviceCollectionDirectMembershipRule -CollectionName “Group 2” -ResourceID (Get-CMDevice -Name $_).ResourceID }
+
+SCCM
+new collection
+3..10 | % { $NewCol = New-CMDeviceCollection -Name “Group $($_)” -LimitingCollectionName “All Clients” -RefreshType Both 
+Move-CMObject -FolderPath “.\DeviceCollection\22H2 Upgrade” -InputObject $NewCol}
+
+
 
 # get MAC Address
 # Solution 1
@@ -2403,7 +3832,7 @@ Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled=
 Select-Object -Property MACAddress, Description
  
 # Solution 2
-Get-WmiObject -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName 3R6DG52-DUB | 
+Get-WmiObject -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $pc | 
 Select-Object -Property MACAddress, Description
  
 
@@ -2417,25 +3846,6 @@ working -  $returnval = ([WMICLASS]"\\W10-MB\ROOT\CIMV2:win32_process").Create("
 
 ([WMICLASS]"\\7V0TGL2-BCS\ROOT\CIMV2:win32_process").Create("\\W10-mb\c$\Temp\jre-8u311-windows-i586.exe `/s")
 
-"\\drstreassrv2.dealers.aib.pri\Droom\JR TEST\infos\MapDrive\jre-8u311-windows-i586.exe"
-
-5DBT762-DUB,C164KF2-DUB,6PP4MM2-DUB,6PN6MM2-DUB,7W7X65J-DUB,24XMS62-DUB,H79W65J-DUB,254LS62-DUB,AIBTL-3M6WG62,AIBTL-4M5465J,6PP3MM2-DUB,6NS5MM2-DUB,4W7X65J-DUB,FBBT762-DUB,W10-LOUISA,6NQ8MM2-DUB,CBCK992-DUB,24TRS62-DUB,AIBTL-7D1465J,CBGP992-DUB,24GMS62-DUB,AIBTL-4WGXG62,C
-CMJF4J-DUB,4CFSG62-DUB,3MKTG62-BEL,3MDXG62-BEL,3MNCF62-BEL,GV7X65J-DUB,6VP4G4J-DUB,717FLG2-DUB,AIBTL-4SVVG62,259MS62-DUB,JWN4422-DUB,W10-MB,4CGCF62-DUB,4CFCF62-DUB,6NT2MM2-BCS,W10-ALYSSON,6FQ44K3-DUB,D5Z71K3-BCS,C5Z71K3-BCS,1FQ44K3-BCS,CDQ44K3-BCS,BDQ44K3-BCS,8FQ44K3-BCS,
-4GQ44K3-BCS,3GQ44K3-BCS,FFQ44K3-DUB,8GQ44K3-BCS,6GQ44K3-BCS,7TZXGL2-BCS,6NV2MM2-BCS,7V0TGL2-BCS
-
-  if ( @($x | ? { $_.AppVersion -ne '8.0.3110.11' }).count -eq 1) 
-  {
-    $x = $x | ? { $_.AppVersion -ne '8.0.3110.11' }
-    if ($x) 
-      { $x | % { 
-          $o = [PSCustomObject]@{ PC=$l; newest=$True; Version=$_.AppVersion }  
-          $o;  [void]$all.Add($o)
-          #Uninstall-Wmi -ComputerName $l -AppGUID $_.AppGUID;  
-          Export-Excel -Path 'C:\Users\dsk_58691\Desktop\uninst-java.xlsx' -InputObject $o -Append
-        } 
-      }
-
-
 
 $staging.Name | % { 
  ADD-ADGroupMember "BCM Deployment Group Win 10" –members "$_$" -Verbose
@@ -2445,18 +3855,6 @@ $staging.Name | % {
 
 iex ${using:function:Test-Modules}.Ast.Extent.Text;Test-Modules
 
-Delete user profile
-
-$CN = "W10-MB"
-
-$opt = New-CimSessionOption -Protocol DCOM
-$s = New-CimSession -Computername $cn -SessionOption $opt -ErrorAction Stop
-
-Get-CimInstance -Class Win32_UserProfile -CimSession $S | SELECT LocalPath
-
-Get-CimInstance -Class Win32_UserProfile -CimSession $S | Where-Object { $_.LocalPath.split('\')[-1] -eq 'dsk_53942' } | Remove-CimInstance
-
-Remove-CimSession $s
 
 (Get-ADPrincipalGroupMembership (Get-ADComputer w10-mb).DistinguishedName).name | ? { $_ -like "*deploy*"}
 
