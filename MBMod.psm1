@@ -13,11 +13,101 @@
  $out = $l | % {  [PSCustomObject]@{ PC = $_; folder=(Test-path "\\$_\c$\Program Files\DRS" ) } }
  $a = $out.folder | % { [PSCustomObject]@{ PC = $_.DirectoryName; size=$_.Length } }
 
- 
  $list = $l | % { $path ="\\$_\c$\Temp\Logs\11023_*.txt";  if (Test-Path $path) { [PSCustomObject]@{ PC = $_; folder=(gci $path ) } } }
  $list.folder | % { PraseNetUse (gc $_) } | select -Unique Remote
 
+copy '\\2FQ44K3-BCS\c$\Temp\updates' 'c:\temp' -Recurse
+Install-MSP
+
 #>
+
+
+function Shared-pcs {
+ $cts = Get-ADComputer -Filter {Description -like "CTS shared*"} -prop Description | select name,description
+ $log = foreach ($pc in $cts.name) { Logged-User $pc } 
+ $log | ft
+}
+
+function cts($id) {
+$log = Get-CTSlogged
+$log | ? { $_.usr -like "*$id*" } 
+}
+
+function Get-CTSlogged {
+ $cts = Get-ADComputer -Filter {Description -like "CTS shared*"} -prop Description | select name,description
+ foreach ($pc in $cts) { 
+  [pscustomobject]@{
+     pc  = $pc.name
+     desc = $pc.description
+     usr = (Get-UserProfile $pc.name | ? { $_ -notlike "dsk_*" }) -join ',' } }
+}
+
+function Get-ADou($name) {
+Get-ADOrganizationalUnit -Filter "Name -like '*$name*'" | ft Name,DistinguishedName 
+}
+
+function New-DealerUser($id) {
+ $secpas = ConvertTo-SecureString -String "Fresh123!" -AsPlainText -Force
+ $id | % { 
+  $u = Get-ADUser $_ -Server prd.aib.pri -Properties GivenName,Surname,DisplayName,Initials,Description,mail
+  New-ADUser -Path 'OU=Non Treasury Users,OU=DRS Win 10 Users,DC=dealers,DC=aib,DC=pri' -Enabled $true `
+           -Name $u.Name -GivenName $u.GivenName -Surname $u.Surname -DisplayName $u.DisplayName `
+           -Initials $u.Initials -Description $u.Description -EmailAddress $u.mail -AccountPassword $secpas 
+  }          
+}
+
+function Get-approved {
+$SusServer = 'DrsOpsMgr3'
+
+[void][reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration")
+$Wsus = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer($SusServer,$false,8530)
+
+$updateScope = New-Object Microsoft.UpdateServices.Administration.UpdateScope
+$updatescope.ApprovedStates = [Microsoft.UpdateServices.Administration.ApprovedStates]::Any
+$updatescope.IncludedInstallationStates = [Microsoft.UpdateServices.Administration.UpdateInstallationStates]::All
+#$updates = $wsus.GetUpdates($updateScope)
+
+$updatescope.ApprovedStates = [Microsoft.UpdateServices.Administration.ApprovedStates]::LatestRevisionApproved
+$approvals = $wsus.GetUpdateApprovals($updatescope) | Select @{L=’ComputerTargetGroup’;E={$_.GetComputerTargetGroup().Name}},
+@{L=’UpdateTitle’;E={($wsus.GetUpdate([guid]$_.UpdateId.UpdateId.Guid)).Title}},GoLiveTime,AdministratorName,@{L=’UpdateId’;E={[guid]$_.UpdateId.UpdateId.Guid}} | ? { $_.ComputerTargetGroup -like "*Win 10*" }  #| sort-object -Property UpdateTitle -Unique | sort GoLiveTime | ft 
+
+[regex]::match($txt, 'KB(\d+)').value
+
+
+# $approvals | select UpdateTitle -Unique | sort UpdateTitle | measure
+# $approvals.count
+
+}
+
+function SetAppr {
+$SusServer = 'DrsCmSrv2'
+
+[void][reflection.assembly]::LoadWithPartialName("Microsoft.UpdateServices.Administration")
+$Srv = [Microsoft.UpdateServices.Administration.AdminProxy]::GetUpdateServer($SusServer,$false,8530)
+$updateScope = New-Object Microsoft.UpdateServices.Administration.UpdateScope
+$updatescope.ApprovedStates = [Microsoft.UpdateServices.Administration.ApprovedStates]::Any
+$updatescope.IncludedInstallationStates = [Microsoft.UpdateServices.Administration.UpdateInstallationStates]::All
+$Srv.GetUpdateCount($updateScope)
+$updates = $Srv.GetUpdates($updateScope)
+
+$approvals | % {
+ $a = $_
+ $u = $srv.GetUpdate($_.UpdateId)
+ $grp = $srv.GetComputerTargetGroups() | ? { $_.name -eq $a.ComputerTargetGroup }
+ "$($u.KnowledgebaseArticles) - $($grp.name)"
+  $u.Approve('Install',$grp)
+ }
+ 
+  $srvappr = $srv.GetUpdateApprovals($updatescope) 
+}
+  
+function RegChange {
+  Set-RemoteReg -PC $env:COMPUTERNAME -HKEY CurrentUser -Path 'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -name ShowSecondsInSystemClock -value 1 -kind DWord
+}
+
+function Close-AllApps {
+  Get-Process |? {$_.MainWindowTitle -ne "" -and $_.Id -ne $PID -and $_.ProcessName -ne "explorer"} | Stop-Process -Force
+}
 
 function New-MyVM {
 $name = 'Win11-02'
@@ -45,9 +135,35 @@ function Test-Tanium ($pcs,$restart=0) {
  }
 }
 
+function Many-MSTSC($pc) {
+$apc = (Import-Csv "G:\AIB Software\_test\VM_vulns_abeup5mb_20250110.csv").pc | % { ($_ -split '\.')[0]} | ? { $_ -ne 'G4Z71K3-BCS' }
+$pc = $apc[3]
+
+ $wsh = New-Object -Com wscript.shell;
+ $pc | % {New-MSTSC $_; Sleep -m 500;$wsh.AppActivate('Windows Security');Sleep -m 500;$wsh.SendKeys("$pas{ENTER}") }
+ sleep 10
+ $ids =  (ListWindows | ? { $_.MainWindowTitle -like "*Remote Desktop*" }).id
+ $ids | % { $wsh.AppActivate($_);sleep 1;$wsh.SendKeys("{ENTER}");sleep 1 }
+ sleep 5
+ $pc | % { Update-Photoapp $_ }
+}
+
+function Update-Photoapp($pc) {
+ # $pc = 'CDQ44K3-BCS'
+ $pc
+ Run-r $pc { $p="C:\Temp\UpdatePhotoApp";cd $p;$c={Add-AppxProvisionedPackage -PackagePath $_.FullName -online -SkipLicense};gci $path *.appx | % $c;gci $path *.msix* | % $c} 
+ Run-r $pc { Get-AppxProvisionedPackage -Online | ? { $_.displayname -like "*photo*" } } | tee -Variable runr
+  (($runr -split "`n")[1] -split ':')[1].trim()
+ #if ($ver -like "2024*") { $id = $((Logged-User $pc).id); MLogoff $pc $id }
+}
+
+function MLogoff($pc,$ses) {
+ logoff $ses /SERVER:$pc
+}
+
 function Test-t {
- $pc = '319GV04-DUB'
- Run-r $pc "Get-appxprovisionedpackage –online | ? {`$_.DisplayName }"
+ $pc = 'HFQ44K3-BCS'  #Run-r $pc "Get-appxprovisionedpackage –online | ? {`$_.DisplayName }"
+ $p="C:\Temp\UpdatePhotoApp";cd $p;$c={Add-AppxProvisionedPackage -PackagePath $_.FullName -online -SkipLicense};gci $path *.appx  | % $c;gci $path *.msix* | % $c
 }
 
 function Run-r {
@@ -57,6 +173,27 @@ function Run-r {
  if (!$pc) { "No PC name provided";break}; if (!(Aping $pc)) {'Offline';break}
  if (!$noprase) { $cmd = $cmd -replace '"','\$&'} # $cmd = "Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Teams*\`" }"
  $rr = Run-Remote $pc "powershell -command `"Start-Transcript c:\Temp\logs\logsps.txt; ''; $cmd; Stop-Transcript;`""
+ while (Get-Process -ComputerName $pc -id $rr.ProcessId -ErrorAction SilentlyContinue) {sleep -m 200}
+ $c = gc "\\$pc\c$\Temp\logs\logsps.txt" -Raw
+ ((($c -split '[\r\n]+(?=Transcript started)')[1] -split '\*\*\*\*+')[0] -split "`n`r" | select -Skip 1 | Out-String ).Trim()
+ Write-Verbose "PC = $pc"
+ Write-Verbose $cmd 
+ Write-Verbose "powershell -command `"Start-Transcript c:\temp\logs\logsps.txt; ''; $cmd; Stop-Transcript`""
+ <#
+  Run-r $pc { Get-AppxProvisionedPackage -Online | ? { $_.displayname -like "*teams*" } | Remove-AppxProvisionedPackage -Online }
+  Run-r $pc { DISM /Online /Add-ProvisionedAppxPackage /PackagePath:"c:\Temp\MSTeams-x64-n.msix" /SkipLicense /LogPath:"c:\Temp\Logs\Dism.txt" }
+  Run-r $pc { msiexec /i "c:\Temp\WIN.msi" ALLUSERS=1 /log c:\temp\logs\msiexec.txt }
+  Run-r 7TZXGL2-DUB { $updateSession = new-object -com "Microsoft.Update.Session"; $updates=$updateSession.CreateupdateSearcher().Search($criteria).Updates;wuauclt /reportnow }
+ #>
+}
+
+function Run-rc {
+  [CmdletBinding()] param( 
+    [Parameter(Mandatory = $True)] [string]$Pc = '5MK0Y04-DUB', $cmd, [switch]$noesc, $cred
+  )
+ if (!$pc) { "No PC name provided";break}; if (!(Aping $pc)) {'Offline';break}
+ if (!$noprase) { $cmd = $cmd -replace '"','\$&'} # $cmd = "Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Teams*\`" }"
+ $rr = Run-RemoteCred $pc "powershell -command `"Start-Transcript c:\Temp\logs\logsps.txt; ''; $cmd; Stop-Transcript;`"" -cred $cred
  while (Get-Process -ComputerName $pc -id $rr.ProcessId -ErrorAction SilentlyContinue) {sleep -m 200}
  $c = gc "\\$pc\c$\Temp\logs\logsps.txt" -Raw
  ((($c -split '[\r\n]+(?=Transcript started)')[1] -split '\*\*\*\*+')[0] -split "`n`r" | select -Skip 1 | Out-String ).Trim()
@@ -156,6 +293,44 @@ function Main {
 }
 
 Main
+
+function Change-Password{
+#explorer.exe shell:::{2559a1f2-21d7-11d4-bdaf-00c04f60b9f0}
+(New-Object -ComObject "Shell.Application").WindowsSecurity()
+}
+
+function Test-Modules {
+  Init
+  $path = "$ModuleDir"  #"$ScriptPath\modules"
+  #if ($ScriptPath -eq $ModulePath2) {$path = Split-Path (Split-Path $ScriptPath)}
+
+  $modUNC = @{ ImportExcel = "$path\ImportExcel\7.4.1\ImportExcel.psd1"
+               MSCatalog   = "$path\MSCatalog\MSCatalog.psd1"
+             }
+  $ModUNC.keys.ForEach( { If (-not(Get-module $_)) { Import-Module $($ModUNC[$_]) -Global -WA SilentlyContinue } })
+}
+
+function ImportMe {
+  #iex ${using:function:ImportMe}.Ast.Extent.Text;ImportMe
+  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -WA SilentlyContinue  
+  #Import-Module "$ScriptPath\modules\MBMod\0.3\MBMod.psm1" -Force -Global -WarningAction SilentlyContinue
+  Init
+}
+
+function Get-CallingFileName {
+  $cStack = @(Get-PSCallStack | ? { $_.ScriptName -and $_.ScriptName -notlike "*MBMod.psm1*" } )
+  $cStack.ScriptName
+}
+
+function ScriptDir {
+  #Only in local file
+  if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
+  #$global:GetScriptDir = { if ($psise) {Split-Path $psise.CurrentFile.FullPath} else {$PSScriptRoot} }
+} 
+
+function ListWindows{
+Get-Process | Where { $_.MainWindowTitle } | Select-Object ProcessName, MainWindowTitle
+}
 
 function Test-BCS {
 $OutFile = "Central Park Checks $(get-date -Format 'yyyy-MM-dd HH-mm').xlsx" 
@@ -311,20 +486,20 @@ if ($nosave) { break }
 $fname = "G:\documentation and procedures\Vulnerability Management\EPO 30 Day Reviews\Dealers_report_$(Get-Date -Format 'yyyy-MM-dd_HH-mm')"
 $out | Out-File "$fname.txt"
 #$all | Export-Csv "$fname.csv" -NoTypeInformation
+Test-Modules
 Export-xlsx $all "$fname.xlsx" 
 "$fname.txt"
 
 # ii "G:\documentation and procedures\Vulnerability Management\EPO 30 Day Reviews\"
 }
 
-function Close-File($pc='DrsCorpSrv2',$name="*xls*"){
+function Close-File($pc='DrsCorpSrv2',$name="*xls*",$user="*",$ReallyClose=0){
 #*Activity Report
- $cred = Get-Credential adm_58691
+ if (Test-Path variable:cred) { if ($cred.UserName -ne 'adm_58691') { $cred = Get-Credential adm_58691 } } else { $cred = Get-Credential adm_58691 }
  $opt = New-CimSessionOption -Protocol DCOM
  $s = New-CimSession -Computername $pc -SessionOption $opt -ErrorAction Stop -Credential $cred
-
- Get-SmbOpenFile -CimSession $s | ? { $_.Path -like $name } #| Close-SmbOpenFile 
-
+ Get-SmbOpenFile -CimSession $s -ClientUserName $user | ? { $_.Path -like $name }  | tee -Variable OpenFiles | select ClientUserName,Path
+ if ($ReallyClose) { "The files will be closed"; pause; $OpenFiles | Close-SmbOpenFile }
  Remove-CimSession $s 
 }
 
@@ -557,14 +732,14 @@ function Save-NewUpdate($path = "C:\Temp\updates") {
 function ExtractCabsFolder ($CabFolder='C:\Temp\updates'){
  $files = gci "$CabFolder\*.cab"
  cd $CabFolder
- $UpFolder = (Split-Path $CabFolder)
+ #$UpFolder = (Split-Path $CabFolder)
  New-Item 'MSP' -ItemType Directory -force | Out-Null
  New-Item 'CabsDone' -ItemType Directory -force | Out-Null
 
  $msp = $CabFolder + '\MSP' 
  $CabsDone = $CabFolder + '\CabsDone' 
  foreach ($f in $files) {
-  New-Item $f.BaseName -ItemType Directory -Force -Verbose | Out-Null
+  New-Item $f.BaseName -ItemType Directory -Force | Out-Null
   $dir = $CabFolder + '\' + $f.BaseName
   expand $f.Name -F:*.msp $dir | Out-Null
   $a = gci "$dir\*.msp"
@@ -573,6 +748,60 @@ function ExtractCabsFolder ($CabFolder='C:\Temp\updates'){
   Move-Item "$f" $CabsDone -Force
   Remove-Item $dir -force 
  } 
+}
+
+function Scan-Updates ($path='C:\Temp\') {
+  #Using WUA to Scan for Updates Offline with PowerShell  #VBS version: https://docs.microsoft.com/en-us/previous-versions/windows/desktop/aa387290(v=vs.85)  
+  #$path = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
+  if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) 
+  { Start-Process powershell.exe -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" ; exit }
+
+  if (Test-Path "$path\wsusscn2.cab") { "File $path\wsusscn2.cab exist" } else { "Downloading $path\wsusscn2.cab exist"
+    # Turn on proxy for internet access
+    Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyServer -Value 'webcorp.prd.aib.pri:8082'
+    set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 1 
+    #Invoke-WebRequest -Uri "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -OutFile "$path\wsusscn2.cab"
+    Start-BitsTransfer -Source "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -Destination "$path\wsusscn2.cab"
+    set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 0
+  } 
+  Write-Output "Adding '$path\wsusscn2.cab' to UpdateServiceManager..." 
+  $UpdateSession = New-Object -ComObject Microsoft.Update.Session  
+  $UpdateServiceManager  = New-Object -ComObject Microsoft.Update.ServiceManager  
+  $UpdateService = $UpdateServiceManager.AddScanPackageService("Offline Sync Service", "$path\wsusscn2.cab", 1)  
+  $UpdateSearcher = $UpdateSession.CreateUpdateSearcher()   
+  Write-Output "Searching for updates..."  
+  $UpdateSearcher.ServerSelection = 3 #ssOthers 
+  $UpdateSearcher.IncludePotentiallySupersededUpdates = $true # good for older OSes, to include Security-Only or superseded updates in the result list, otherwise these are pruned out and not returned as part of the final result list 
+  $UpdateSearcher.ServiceID = $UpdateService.ServiceID.ToString()  
+  $SearchResult = $UpdateSearcher.Search("IsInstalled=0") # or "IsInstalled=0 or IsInstalled=1" to also list the installed updates as MBSA did  
+  $Updates = $SearchResult.Updates 
+  
+  $date = (Get-Date -F "yy-MM-dd HH-mm")
+  $all = @( $Updates | % { $kb = ($_.Title | Select-String '(?<=\()[^]]+(?=\))' -AllMatches).Matches.Value; [PSCustomObject]@{ KB = $kb; Title = $_.Title  } } ) | sort kb -Descending
+  $out = $all | % { $_.kb + "`t" + $_.Title }
+
+  if(($Updates | measure).Count -eq 0){ "There are no applicable updates." | tee "$path\wsusscan $date.txt"
+  } else { Write-Output "List of applicable items on the machine when using wssuscan.cab:"; $all.kb | Out-File "$path\wsusscan $date.txt" }
+  $out | tee "$path\wsusscan $date.txt" -Append
+
+function Speak($text) {
+  Add-Type -AssemblyName System.speech
+  $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer
+  $speak.Rate = 3
+  $speak.Speak($text) 
+}
+
+  if ( (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -eq 1) { Speak "Scan Complete" }  #Speak if we are on workstation #pause
+}
+
+function Install-MSP ($path='C:\Temp\updates'){
+  if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) 
+  { Start-Process powershell.exe -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" ; exit }
+  $currPath = if ($psISE) {Split-Path $psISE.CurrentFile.FullPath} else {$PSScriptRoot} 
+  cd $path
+  $files = (Get-ChildItem $path\MSP *.msp).FullName 
+  $files | % { $_; Start-Process -file $_ -arg "/qn /norestart" -Wait -Verbose  }
+  # pause
 }
 
 function Move-toCM($path='C:\Temp\updates\') {
@@ -598,7 +827,7 @@ function Move-toCM($path='C:\Temp\updates\') {
  }
 }
 
-function New-Test {
+function New-Patches {
   Save-NewUpdate
   ExtractCabsFolder
   Move-toCM
@@ -623,6 +852,8 @@ Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManag
                 CollectionName = $Collection
                 AvailableDateTime = $Time
                 #DeadlineDateTime = $Time
+                #RebootOutsideServiceWindow = $true
+                #OverrideServiceWindow = $true
                 DeployAction = "Install"                
                 DeployPurpose = "Required"
                 UserNotification = "DisplaySoftwareCenterOnly"
@@ -632,6 +863,7 @@ Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManag
   } 
  $Time = $Time.AddMinutes(15)
  New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
+ Set-CMSoftwareUpdateDeployment -
  }
  c:
 }
@@ -691,7 +923,7 @@ function ScriptDir {
 } 
 
 function ListWindows{
-Get-Process | Where { $_.MainWindowTitle } | Select-Object ProcessName, MainWindowTitle
+Get-Process | Where { $_.MainWindowTitle } | Select-Object ID,ProcessName, MainWindowTitle
 }
 
 function decom($pc){
@@ -912,13 +1144,11 @@ function Run-Remote2($Pc,$Cmd,$Timeout=3,$CurrentDir=’C:\temp’) {
   } catch { $false } 
 }
 
-
 <#
 AIB MENU
 $c = "msiexec.exe /qn /i ""C:\Temp\Rocket Passport To PC Host\Passport.msi"" /quiet /qn LICENSE=""DRKV-FG92-1COQ-KB7P"" ALLUSERS=2 USERDATADIR=""C:\Program Files (x86)\PASSPORT\"""
 $pc = "6NS9MM2-DUB"
 Run-Remote $pc $c
-
 #>
 
 function Run-RemoteCred($Pc,$Cmd,$Timeout=3,$CurrentDir=’C:\temp’,$cred) {
@@ -1028,6 +1258,7 @@ function Remove-AllUsersProfile($PC){
 function ADinfo {
   #Write-Debug "Updating AD from servers"
   Init
+  If (-not(Get-module ImportExcel)) { Import-Module "$ModuleDir\ImportExcel\7.4.1\ImportExcel.psd1" -Global -WA SilentlyContinue } 
   $null = Get-DealersUsers 
   $null = Get-DealersPCs
   Export-Xlsx $ADu $upath 
@@ -1049,7 +1280,7 @@ function Get-ADinfo {
 function Get-DealersUsers {
   $global:ADu = New-Object System.Collections.Generic.List[System.Object]
   $tempU = New-Object System.Collections.Generic.List[System.Object]
-  $prop = @('msDS-UserPasswordExpiryTimeComputed', 'Name', 'DisplayName', 'Description', 'Office', 'mail', 'LastBadPasswordAttempt', 'BadPwdCount', 'LockedOut', 'pwdLastSet')
+  $prop = @('msDS-UserPasswordExpiryTimeComputed', 'Name', 'DisplayName', 'Description', 'Office', 'mail', 'LastBadPasswordAttempt', 'BadPwdCount', 'LockedOut', 'pwdLastSet', 'proxyAddresses')
   #$global:ADu = Get-ADUser -Filter * -Properties $prop | ? { $_.name -match '^\d{5}$' } 
   $tempU.AddRange( (Get-ADUser -Filter * -Properties $prop ) )  # | ? { $_.name -match '^\d{5}$' }
   $tempU | % {
@@ -1057,14 +1288,13 @@ function Get-DealersUsers {
     else { Get-Date ([DateTime]::FromFileTime([Int64]::Parse($_.'msDS-UserPasswordExpiryTimeComputed'))) } # -Format "dd/MM/yyyy HH:mm:ss"   ([datetime]::FromFileTime($_."msDS-UserPasswordExpiryTimeComputed")) 
     $_ | Add-Member -MemberType NoteProperty -Name 'ExpiryDate' -Value $val -Force
     $_ | Add-Member -MemberType NoteProperty -Name 'LastPwdSet' -Value (Get-Date ([DateTime]::FromFileTime([Int64]::Parse($_.pwdLastSet)))) -Force
-    if ($_.pwdLastSet) { $_.pwdLastSet  }
-
+    # not needed ? if ($_.pwdLastSet) { $_.pwdLastSet  }
   } 
   $ex = 'msDS-UserPasswordExpiryTimeComputed', 'pwdLastSet', 'WriteDebugStream', 'WriteErrorStream', 'WriteInformationStream', 'WriteVerboseStream', 'WriteWarningStream', 'PropertyNames', 'AddedProperties', 'RemovedProperties', 'ModifiedProperties', 'PropertyCount'
   $ADu.AddRange( ($tempU | select * -ExcludeProperty $ex) )
   Remove-Variable TempU
   $r = 'St Helens', 'London', '1st Floor,', ' 1 Undershaft', 'Old Jewry' -join '|'
-  $ADu | % { $_.office = ($_.office -replace $r).trim() } #($r|%{if ($u -match $_){$u -replace $_,''}}).Trim()
+  $ADu | % { $_.office = ($_.office -replace $r).trim() }
 }
 
 function Get-DealersPCs {
@@ -1090,7 +1320,7 @@ function LockoutStatusJob ($user) {
 
 function LockoutStatus ($user) {
   $DCs = New-Object System.Collections.Generic.List[System.Object]
-  $DCs.AddRange( (Get-ADDomainController -Filter * | select -Skip 1) )
+  $DCs.AddRange( (Get-ADDomainController -Filter * | Select -Skip 1) )
   $DCs.AddRange( (Get-ADDomainController -Filter * -Server prd.aib.pri | Select -First 10) )
   $online = APing($DCs.hostname)
   Foreach ($DC in $online) {
@@ -1355,6 +1585,31 @@ function Get-LoggedUsers {
 
 function Logged-User {
   [CmdletBinding()]Param([Parameter(ValueFromPipeline)]$pc)
+  begin { if (-not (Test-Path variable:adu) ) { ADinfo } }
+  process {
+    if ($pc -eq "") { $pc = $env:COMPUTERNAME }
+    $o = [PScustomObject]@{ Computer = $pc; Description = ($Adc | ? { $_.name -eq $pc }).Description; 
+      USERNAME = ''; DisplayName = ''; SESSIONNAME = ''; ID = ''; STATE = ''; 'IDLE TIME' = ''; 'LOGON TIME' = '';
+      dt = (get-date -Format G)    
+    }
+      if (APing $pc) {
+        try {
+          $temp = (query user /server:$pc 2>&1)  
+          If ($temp) { # If ($temp -split '`n' -eq 'No User exists for *') {$temp = $null; $user = $false}
+            $r = $temp -replace '\s{2,}', ',' | ConvertFrom-Csv
+            $r.psobject.Properties.name | % { $o.$_ = $r.$_ }
+            $o.DisplayName = ($adu | ? { $_.name -eq $r.USERNAME }).DisplayName 
+          }
+        }
+        catch { $o.USERNAME = 'NONE' }
+      }
+      else { $o.USERNAME = 'OFFLINE' }
+    $o
+  }
+}
+
+function Logged-User2 {
+  [CmdletBinding()]Param([Parameter(ValueFromPipeline)]$pc)
   process {
     
     if ($pc -eq "") { $pc = $env:COMPUTERNAME }
@@ -1377,6 +1632,7 @@ function Logged-User {
     $o
   }
 }
+
 
 function isLogged($pc = "$env:COMPUTERNAME") {
 $i = 0; $user = $null; $r = $null
@@ -1841,7 +2097,7 @@ function Accelerators {
   [accelerators]::Get   # this now works
 }
 
-function Send-Enter {
+function Set-Foreground($hWnd) {
   $pinvokes = @'
   [DllImport("user32.dll", CharSet=CharSet.Auto)]
   public static extern IntPtr FindWindow(IntPtr sClassName, string lpWindowName);
@@ -1849,17 +2105,9 @@ function Send-Enter {
   [return: MarshalAs(UnmanagedType.Bool)]
   public static extern bool SetForegroundWindow(IntPtr hWnd);
 '@
-  Add-Type -AssemblyName System.Windows.Forms
   Add-Type -MemberDefinition $pinvokes -Name My -Namespace MB
-
-  while ([MB.My]::FindWindow([intptr]::zero, "McAfee Agent") -eq 0) {
-    sleep -Milliseconds 300
-  }
-  $hwnd = [MB.My]::FindWindow([intptr]::zero, "McAfee Agent")
-  if ($hwnd) {
-    [MB.My]::SetForegroundWindow($hwnd)
-    [System.Windows.Forms.SendKeys]::SendWait("{ENTER}")
-  }
+  # [MB.My]::FindWindow([intptr]::zero,"Administrator: Windows PowerShell")
+  [MB.My]::SetForegroundWindow($hWnd)
 }
 
 function Split-File {
@@ -2872,58 +3120,6 @@ $pc | % {
 
 }
 
-function Scan-Updates {
-#Using WUA to Scan for Updates Offline with PowerShell  #VBS version: https://docs.microsoft.com/en-us/previous-versions/windows/desktop/aa387290(v=vs.85)  
-
-$path = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
-
-if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) 
-{ Start-Process powershell.exe -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" ; exit }
-
-if (Test-Path "$path\wsusscn2.cab") { "File $path\wsusscn2.cab exist" } else { "Downloading $path\wsusscn2.cab exist"
-  # Turn on proxy for internet access
-  Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyServer -Value 'webcorp.prd.aib.pri:8082'
-  set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 1 
-  #Invoke-WebRequest -Uri "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -OutFile "$path\wsusscn2.cab"
-  Start-BitsTransfer -Source "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -Destination "$path\wsusscn2.cab"
-  set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 0
-} 
-  
-Write-Output "Adding '$path\wsusscn2.cab' to UpdateServiceManager..." 
-$UpdateSession = New-Object -ComObject Microsoft.Update.Session  
-$UpdateServiceManager  = New-Object -ComObject Microsoft.Update.ServiceManager  
-$UpdateService = $UpdateServiceManager.AddScanPackageService("Offline Sync Service", "$path\wsusscn2.cab", 1)  
-$UpdateSearcher = $UpdateSession.CreateUpdateSearcher()   
-Write-Output "Searching for updates..."  
-$UpdateSearcher.ServerSelection = 3 #ssOthers 
-$UpdateSearcher.IncludePotentiallySupersededUpdates = $true # good for older OSes, to include Security-Only or superseded updates in the result list, otherwise these are pruned out and not returned as part of the final result list 
-$UpdateSearcher.ServiceID = $UpdateService.ServiceID.ToString()  
-$SearchResult = $UpdateSearcher.Search("IsInstalled=0") # or "IsInstalled=0 or IsInstalled=1" to also list the installed updates as MBSA did  
-$Updates = $SearchResult.Updates  
-
-$date = (Get-Date -F "yy-MM-dd HH-mm")
-
-$all = @( $Updates | % { $kb = ($_.Title | Select-String '(?<=\()[^]]+(?=\))' -AllMatches).Matches.Value; [PSCustomObject]@{ KB = $kb; Title = $_.Title  } } ) | sort kb -Descending
-$out = $all | % { $_.kb + "`t" + $_.Title }
-
-if($Updates.Count -eq 0){ "There are no applicable updates." | tee "$path\wsusscan $date.txt"
- } else { Write-Output "List of applicable items on the machine when using wssuscan.cab:" }
-  
-$out | tee "$path\wsusscan $date.txt" -Append
-
-function Speak($text) {
-  Add-Type -AssemblyName System.speech
-  $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer
-  $speak.Rate = 3
-  $speak.Speak($text) 
-}
-
-if ( (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -eq 1) { Speak "Scan Complete" }  #Speak if we are on workstation
-
-#pause
-
-}
-
 function Get-CMCollectionOfDevice {
     [CmdletBinding()]
     [OutputType([int])]
@@ -3437,8 +3633,8 @@ if ($exist) {
 
 
 Function Get-LastLoginInfo {
-#requires -RunAsAdministrator
-<#
+
+<##requires -RunAsAdministrator
 .Synopsis
     This will get a Information on the last users who logged into a machine.
     More info can be found: https://docs.microsoft.com/en-us/windows/security/threat-protection/auditing/basic-audit-logon-events
@@ -3794,9 +3990,269 @@ if (Test-Path $Folder) {
 Write-Host "-- Script Completed: File Downloaded -- " -ForegroundColor Green
 }
 
+Function Set-Window {
+<#
+.SYNOPSIS
+Retrieve/Set the window size and coordinates of a process window.
 
+.DESCRIPTION
+Retrieve/Set the size (height,width) and coordinates (x,y) 
+of a process window.
 
+.PARAMETER ProcessName
+Name of the process to determine the window characteristics. 
+(All processes if omitted).
 
+.PARAMETER Id
+Id of the process to determine the window characteristics. 
+
+.PARAMETER X
+Set the position of the window in pixels from the left.
+
+.PARAMETER Y
+Set the position of the window in pixels from the top.
+
+.PARAMETER Width
+Set the width of the window.
+
+.PARAMETER Height
+Set the height of the window.
+
+.PARAMETER Passthru
+Returns the output object of the window.
+
+.NOTES
+Name:   Set-Window
+Author: Boe Prox
+Version History:
+    1.0//Boe Prox - 11/24/2015 - Initial build
+    1.1//JosefZ   - 19.05.2018 - Treats more process instances 
+                                 of supplied process name properly
+    1.2//JosefZ   - 21.02.2019 - Parameter Id
+
+.OUTPUTS
+None
+System.Management.Automation.PSCustomObject
+System.Object
+
+.EXAMPLE
+Get-Process powershell | Set-Window -X 20 -Y 40 -Passthru -Verbose
+VERBOSE: powershell (Id=11140, Handle=132410)
+
+Id          : 11140
+ProcessName : powershell
+Size        : 1134,781
+TopLeft     : 20,40
+BottomRight : 1154,821
+
+Description: Set the coordinates on the window for the process PowerShell.exe
+
+.EXAMPLE
+$windowArray = Set-Window -Passthru
+WARNING: cmd (1096) is minimized! Coordinates will not be accurate.
+
+    PS C:\>$windowArray | Format-Table -AutoSize
+
+  Id ProcessName    Size     TopLeft       BottomRight  
+  -- -----------    ----     -------       -----------  
+1096 cmd            199,34   -32000,-32000 -31801,-31966
+4088 explorer       1280,50  0,974         1280,1024    
+6880 powershell     1280,974 0,0           1280,974     
+
+Description: Get the coordinates of all visible windows and save them into the
+             $windowArray variable. Then, display them in a table view.
+
+.EXAMPLE
+Set-Window -Id $PID -Passthru | Format-Table
+​‌‍
+  Id ProcessName Size     TopLeft BottomRight
+  -- ----------- ----     ------- -----------
+7840 pwsh        1024,638 0,0     1024,638
+
+Description: Display the coordinates of the window for the current 
+             PowerShell session in a table view.
+             
+
+     
+#>
+[cmdletbinding(DefaultParameterSetName='Name')]
+Param (
+    [parameter(Mandatory=$False,
+        ValueFromPipelineByPropertyName=$True, ParameterSetName='Name')]
+    [string]$ProcessName='*',
+    [parameter(Mandatory=$True,
+        ValueFromPipeline=$False,              ParameterSetName='Id')]
+    [int]$Id,
+    [int]$X,
+    [int]$Y,
+    [int]$Width,
+    [int]$Height,
+    [switch]$Passthru
+)
+Begin {
+    Try { 
+        [void][Window]
+    } Catch {
+    Add-Type @"
+        using System;
+        using System.Runtime.InteropServices;
+        public class Window {
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetWindowRect(
+            IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public extern static bool MoveWindow(  
+            IntPtr handle, int x, int y, int width, int height, bool redraw);
+              
+        [DllImport("user32.dll")] 
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ShowWindow(
+            IntPtr handle, int state);
+        }
+        public struct RECT
+        {
+        public int Left;        // x position of upper-left corner
+        public int Top;         // y position of upper-left corner
+        public int Right;       // x position of lower-right corner
+        public int Bottom;      // y position of lower-right corner
+        }
+"@
+    }
+}
+Process {
+    $Rectangle = New-Object RECT
+    If ( $PSBoundParameters.ContainsKey('Id') ) {
+        $Processes = Get-Process -Id $Id -ErrorAction SilentlyContinue
+    } else {
+        $Processes = Get-Process -Name "$ProcessName" -ErrorAction SilentlyContinue
+    }
+    if ( $null -eq $Processes ) {
+        If ( $PSBoundParameters['Passthru'] ) { 
+            Write-Warning 'No process match criteria specified'
+        }
+    } else {
+        $Processes | ForEach-Object {
+            $Handle = $_.MainWindowHandle
+            Write-Verbose "$($_.ProcessName) `(Id=$($_.Id), Handle=$Handle`)"
+            if ( $Handle -eq [System.IntPtr]::Zero ) { return }
+            $Return = [Window]::GetWindowRect($Handle,[ref]$Rectangle)
+            If (-NOT $PSBoundParameters.ContainsKey('X')) {
+                $X = $Rectangle.Left            
+            }
+            If (-NOT $PSBoundParameters.ContainsKey('Y')) {
+                $Y = $Rectangle.Top
+            }
+            If (-NOT $PSBoundParameters.ContainsKey('Width')) {
+                $Width = $Rectangle.Right - $Rectangle.Left
+            }
+            If (-NOT $PSBoundParameters.ContainsKey('Height')) {
+                $Height = $Rectangle.Bottom - $Rectangle.Top
+            }
+            If ( $Return ) {
+                $Return = [Window]::MoveWindow($Handle, $x, $y, $Width, $Height,$True)
+            }
+            If ( $PSBoundParameters['Passthru'] ) {
+                $Rectangle = New-Object RECT
+                $Return = [Window]::GetWindowRect($Handle,[ref]$Rectangle)
+                If ( $Return ) {
+                    $Height      = $Rectangle.Bottom - $Rectangle.Top
+                    $Width       = $Rectangle.Right  - $Rectangle.Left
+                    $Size        = New-Object System.Management.Automation.Host.Size        -ArgumentList $Width, $Height
+                    $TopLeft     = New-Object System.Management.Automation.Host.Coordinates -ArgumentList $Rectangle.Left , $Rectangle.Top
+                    $BottomRight = New-Object System.Management.Automation.Host.Coordinates -ArgumentList $Rectangle.Right, $Rectangle.Bottom
+                    If ($Rectangle.Top    -lt 0 -AND 
+                        $Rectangle.Bottom -lt 0 -AND
+                        $Rectangle.Left   -lt 0 -AND
+                        $Rectangle.Right  -lt 0) {
+                        Write-Warning "$($_.ProcessName) `($($_.Id)`) is minimized! Coordinates will not be accurate."
+                    }
+                    $Object = [PSCustomObject]@{
+                        Id          = $_.Id
+                        ProcessName = $_.ProcessName
+                        Size        = $Size
+                        TopLeft     = $TopLeft
+                        BottomRight = $BottomRight
+                    }
+                    $Object
+                }
+            }
+        }
+    }
+}
+}
+
+Function Get-ScreenColor {
+    <#
+    .SYNOPSIS
+    Gets the color of the pixel under the mouse, or of the specified space.
+    .DESCRIPTION
+    Returns the pixel color either under the mouse, or of a location onscreen using X/Y locating.  If no parameters are supplied, the mouse cursor position will be retrived and used.
+
+    Current Version - 1.0
+    .EXAMPLE
+    Mouse-Color
+    Returns the color of the pixel directly under the mouse cursor.
+    .EXAMPLE
+    Mouse-Color -X 300 -Y 300
+    Returns the color of the pixel 300 pixels from the top of the screen and 300 pixels from the left.
+    .PARAMETER X
+    Distance from the top of the screen to retrieve color, in pixels.
+    .PARAMETER Y
+    Distance from the left of the screen to retrieve color, in pixels.
+    .NOTES
+
+    Revision History
+    Version 1.0
+        - Live release.  Contains two parameter sets - an empty default, and an X/Y set.
+    #>
+
+    #Requires -Version 4.0
+
+    [CmdletBinding(DefaultParameterSetName='None')]
+
+    param(
+        [Parameter(
+            Mandatory=$true,
+            ParameterSetName="Pos"
+        )]
+        [Int]
+        $X,
+        [Parameter(
+            Mandatory=$true,
+            ParameterSetName="Pos"
+        )]
+        [Int]
+        $Y
+    )
+    
+    if ($PSCmdlet.ParameterSetName -eq 'None') {
+        $pos = [System.Windows.Forms.Cursor]::Position
+    } else {
+        $pos = New-Object psobject
+        $pos | Add-Member -MemberType NoteProperty -Name "X" -Value $X
+        $pos | Add-Member -MemberType NoteProperty -Name "Y" -Value $Y
+    }
+    $map = [System.Drawing.Rectangle]::FromLTRB($pos.X, $pos.Y, $pos.X + 1, $pos.Y + 1)
+    $bmp = New-Object System.Drawing.Bitmap(1,1)
+    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+    $graphics.CopyFromScreen($map.Location, [System.Drawing.Point]::Empty, $map.Size)
+    $pixel = $bmp.GetPixel(0,0)
+    $red = $pixel.R
+    $green = $pixel.G
+    $blue = $pixel.B
+    $result = New-Object psobject
+    if ($PSCmdlet.ParameterSetName -eq 'None') {
+        $result | Add-Member -MemberType NoteProperty -Name "X" -Value $([System.Windows.Forms.Cursor]::Position).X
+        $result | Add-Member -MemberType NoteProperty -Name "Y" -Value $([System.Windows.Forms.Cursor]::Position).Y
+    }
+    $result | Add-Member -MemberType NoteProperty -Name "Red" -Value $red
+    $result | Add-Member -MemberType NoteProperty -Name "Green" -Value $green
+    $result | Add-Member -MemberType NoteProperty -Name "Blue" -Value $blue
+    return $result
+}
 
 <#
 
