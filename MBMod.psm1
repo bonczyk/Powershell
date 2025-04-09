@@ -15,10 +15,7 @@
 
  $list = $l | % { $path ="\\$_\c$\Temp\Logs\11023_*.txt";  if (Test-Path $path) { [PSCustomObject]@{ PC = $_; folder=(gci $path ) } } }
  $list.folder | % { PraseNetUse (gc $_) } | select -Unique Remote
-
-copy '\\2FQ44K3-BCS\c$\Temp\updates' 'c:\temp' -Recurse
-Install-MSP
-
+ 
 #>
 
 
@@ -43,7 +40,7 @@ function Get-CTSlogged {
 }
 
 function Get-ADou($name) {
-Get-ADOrganizationalUnit -Filter "Name -like '*$name*'" | ft Name,DistinguishedName 
+  Get-ADOrganizationalUnit -Filter "Name -like '*$name*'" | ft Name,DistinguishedName 
 }
 
 function New-DealerUser($id) {
@@ -53,7 +50,8 @@ function New-DealerUser($id) {
   New-ADUser -Path 'OU=Non Treasury Users,OU=DRS Win 10 Users,DC=dealers,DC=aib,DC=pri' -Enabled $true `
            -Name $u.Name -GivenName $u.GivenName -Surname $u.Surname -DisplayName $u.DisplayName `
            -Initials $u.Initials -Description $u.Description -EmailAddress $u.mail -AccountPassword $secpas 
-  }          
+  }
+  $id | % { Get-ADUser $_ }
 }
 
 function Get-approved {
@@ -135,6 +133,15 @@ function Test-Tanium ($pcs,$restart=0) {
  }
 }
 
+function SendKeys($Name,$Keys) { # {ENTER} {TAB} ^Ctrl +Shift %Alt https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/sendkeys-statement
+ $wsh = New-Object -Com wscript.shell;
+ $ids =  (ListWindows | ? { $_.MainWindowTitle -like "*$name*" }).id
+ $wsh.AppActivate("$name");
+ Sleep -m 300;
+ $wsh.SendKeys("$keys")
+ sleep -m 100
+}
+
 function Many-MSTSC($pc) {
 $apc = (Import-Csv "G:\AIB Software\_test\VM_vulns_abeup5mb_20250110.csv").pc | % { ($_ -split '\.')[0]} | ? { $_ -ne 'G4Z71K3-BCS' }
 $pc = $apc[3]
@@ -208,7 +215,7 @@ function Run-rc {
  #>
 }
 
-function PraseNetUse($netuse) {
+function PraseNetUse($netuse=(net use)) {
  $netuse -like '* \\*' | % {  $Status,$Local,$Remote,$Null = $_ -split ' +',4
  [PSCustomObject]@{
    Status = $Status
@@ -329,12 +336,12 @@ function ScriptDir {
 } 
 
 function ListWindows{
-Get-Process | Where { $_.MainWindowTitle } | Select-Object ProcessName, MainWindowTitle
+  Get-Process | Where { $_.MainWindowTitle } | Select-Object ProcessName, MainWindowTitle
 }
 
 function Test-BCS {
 $OutFile = "Central Park Checks $(get-date -Format 'yyyy-MM-dd HH-mm').xlsx" 
-$OutPath = '\\DRSITSRV1\DRSsupport$\Daily Checks\Completed Central Park Checks'
+$OutPath = 'G:\Daily Checks\Completed Central Park Checks'
 
 Test-Modules;
 $path = Join-Path $OutPath $OutFile
@@ -361,7 +368,8 @@ $out = foreach ($pc in $list) {
 }
 
 $out | ft
-"$(($out.pass -eq $true).count) out of $($list.count)"
+"$(($out.pass -eq $true).count) out of $($list.count) computers online in Central Park"
+$path
 $out | ? { ! $_.pass } | ft
 $global:BCS = $out
 
@@ -409,7 +417,7 @@ function Wysw($x,$y,$text,$ftime=75,$color) {
 }
 
 function Zegar {
- Wysw 60 1 $(Get-Date -F 'HH:mm:ss') 
+  Wysw 60 1 $(Get-Date -F 'HH:mm:ss') 
 }
 
 function Spinner($x,$y,$speed=75) {
@@ -590,8 +598,8 @@ function Get-DesktopUpdates { # Save-MSCatalogUpdate
   Sleep -Seconds 1
   $Last30Days = {$_.LastUpdated -gt (Get-Date).AddDays(-20)}
   $d =  @(Get-MSCatalogUpdate -Search "Cumulative*Windows 10*22H2*x64" -Strict -ExcludePreview | ? { $_.Title -notlike "*Dynamic*" -and  $_.Title -notlike "*4.8.1*" } | ? $Last30Days)
-  $d += Get-MSCatalogUpdate -Search "Update*2016*32" -Strict | ? $Last30Days
-  $d += Get-MSCatalogUpdate -Search "Update*2016*64" -Strict | ? $Last30Days
+  #$d += Get-MSCatalogUpdate -Search "Update*2016*32" -Strict | ? $Last30Days
+  #$d += Get-MSCatalogUpdate -Search "Update*2016*64" -Strict | ? $Last30Days
   $d | sort Title -Unique | tee -Variable global:kbs 
   Set-Proxy 0
 }
@@ -732,14 +740,14 @@ function Save-NewUpdate($path = "C:\Temp\updates") {
 function ExtractCabsFolder ($CabFolder='C:\Temp\updates'){
  $files = gci "$CabFolder\*.cab"
  cd $CabFolder
- #$UpFolder = (Split-Path $CabFolder)
+ $UpFolder = (Split-Path $CabFolder)
  New-Item 'MSP' -ItemType Directory -force | Out-Null
  New-Item 'CabsDone' -ItemType Directory -force | Out-Null
 
  $msp = $CabFolder + '\MSP' 
  $CabsDone = $CabFolder + '\CabsDone' 
  foreach ($f in $files) {
-  New-Item $f.BaseName -ItemType Directory -Force | Out-Null
+  New-Item $f.BaseName -ItemType Directory -Force -Verbose | Out-Null
   $dir = $CabFolder + '\' + $f.BaseName
   expand $f.Name -F:*.msp $dir | Out-Null
   $a = gci "$dir\*.msp"
@@ -748,60 +756,6 @@ function ExtractCabsFolder ($CabFolder='C:\Temp\updates'){
   Move-Item "$f" $CabsDone -Force
   Remove-Item $dir -force 
  } 
-}
-
-function Scan-Updates ($path='C:\Temp\') {
-  #Using WUA to Scan for Updates Offline with PowerShell  #VBS version: https://docs.microsoft.com/en-us/previous-versions/windows/desktop/aa387290(v=vs.85)  
-  #$path = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
-  if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) 
-  { Start-Process powershell.exe -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" ; exit }
-
-  if (Test-Path "$path\wsusscn2.cab") { "File $path\wsusscn2.cab exist" } else { "Downloading $path\wsusscn2.cab exist"
-    # Turn on proxy for internet access
-    Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyServer -Value 'webcorp.prd.aib.pri:8082'
-    set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 1 
-    #Invoke-WebRequest -Uri "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -OutFile "$path\wsusscn2.cab"
-    Start-BitsTransfer -Source "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -Destination "$path\wsusscn2.cab"
-    set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 0
-  } 
-  Write-Output "Adding '$path\wsusscn2.cab' to UpdateServiceManager..." 
-  $UpdateSession = New-Object -ComObject Microsoft.Update.Session  
-  $UpdateServiceManager  = New-Object -ComObject Microsoft.Update.ServiceManager  
-  $UpdateService = $UpdateServiceManager.AddScanPackageService("Offline Sync Service", "$path\wsusscn2.cab", 1)  
-  $UpdateSearcher = $UpdateSession.CreateUpdateSearcher()   
-  Write-Output "Searching for updates..."  
-  $UpdateSearcher.ServerSelection = 3 #ssOthers 
-  $UpdateSearcher.IncludePotentiallySupersededUpdates = $true # good for older OSes, to include Security-Only or superseded updates in the result list, otherwise these are pruned out and not returned as part of the final result list 
-  $UpdateSearcher.ServiceID = $UpdateService.ServiceID.ToString()  
-  $SearchResult = $UpdateSearcher.Search("IsInstalled=0") # or "IsInstalled=0 or IsInstalled=1" to also list the installed updates as MBSA did  
-  $Updates = $SearchResult.Updates 
-  
-  $date = (Get-Date -F "yy-MM-dd HH-mm")
-  $all = @( $Updates | % { $kb = ($_.Title | Select-String '(?<=\()[^]]+(?=\))' -AllMatches).Matches.Value; [PSCustomObject]@{ KB = $kb; Title = $_.Title  } } ) | sort kb -Descending
-  $out = $all | % { $_.kb + "`t" + $_.Title }
-
-  if(($Updates | measure).Count -eq 0){ "There are no applicable updates." | tee "$path\wsusscan $date.txt"
-  } else { Write-Output "List of applicable items on the machine when using wssuscan.cab:"; $all.kb | Out-File "$path\wsusscan $date.txt" }
-  $out | tee "$path\wsusscan $date.txt" -Append
-
-function Speak($text) {
-  Add-Type -AssemblyName System.speech
-  $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer
-  $speak.Rate = 3
-  $speak.Speak($text) 
-}
-
-  if ( (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -eq 1) { Speak "Scan Complete" }  #Speak if we are on workstation #pause
-}
-
-function Install-MSP ($path='C:\Temp\updates'){
-  if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) 
-  { Start-Process powershell.exe -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" ; exit }
-  $currPath = if ($psISE) {Split-Path $psISE.CurrentFile.FullPath} else {$PSScriptRoot} 
-  cd $path
-  $files = (Get-ChildItem $path\MSP *.msp).FullName 
-  $files | % { $_; Start-Process -file $_ -arg "/qn /norestart" -Wait -Verbose  }
-  # pause
 }
 
 function Move-toCM($path='C:\Temp\updates\') {
@@ -827,7 +781,7 @@ function Move-toCM($path='C:\Temp\updates\') {
  }
 }
 
-function New-Patches {
+function New-Test {
   Save-NewUpdate
   ExtractCabsFolder
   Move-toCM
@@ -840,7 +794,9 @@ function New-Patches {
 # jesli brak czasu jest as soon as possible
 # DeployToGroup -Collection 'Feb_patches'
 
-function DeployToGroup($Apps="$(Get-Date –f yyyy-MM)-*",$Collection='SCCM Test Group',$Time=(get-date -Hour 22 -Minute 03)) {
+function DeployToGroup($Apps="$(Get-Date –f yyyy-MM)-*",
+    [Parameter(Mandatory=$False)][ValidateSet('SCCM Pre-Test Group','SCCM Test Group','SCCM Group 1','SCCM Group 2','SCCM Group 3','SCCM Group 4')]
+    [string]$Collection='SCCM Pre-Test Group', $Time=(get-date -Hour 22 -Minute 03)) {
 Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); cd "DUB:\"
  $appsToDeploy = Get-CMApplication -Name $Apps | select -ExpandProperty LocalizedDisplayName 
  #$appsToDeploy =  $appsToDeploy | ? { $_ -like "*cu*"}
@@ -852,8 +808,6 @@ Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManag
                 CollectionName = $Collection
                 AvailableDateTime = $Time
                 #DeadlineDateTime = $Time
-                #RebootOutsideServiceWindow = $true
-                #OverrideServiceWindow = $true
                 DeployAction = "Install"                
                 DeployPurpose = "Required"
                 UserNotification = "DisplaySoftwareCenterOnly"
@@ -863,7 +817,6 @@ Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManag
   } 
  $Time = $Time.AddMinutes(15)
  New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
- Set-CMSoftwareUpdateDeployment -
  }
  c:
 }
@@ -884,11 +837,6 @@ function Get-NewUpdateSCCM {
   % {  [PSCustomObject]@{ KB = [regex]::match($_.LocalizedDisplayName, 'KB(\d+)').value; Name = $_.LocalizedDisplayName; Description = $_.LocalizedDescription; Date = $_.DatePosted; } } |
   sort KB
  cd $SavedPath
-}
-
-function Change-Password{
-#explorer.exe shell:::{2559a1f2-21d7-11d4-bdaf-00c04f60b9f0}
-(New-Object -ComObject "Shell.Application").WindowsSecurity()
 }
 
 function Test-Modules {
@@ -1298,6 +1246,8 @@ function Get-DealersUsers {
 }
 
 function Get-DealersPCs {
+  # $s = ([adsisearcher]"(&(objectCategory=computer)(!(operatingsystem=*Server*))((operatingsystem=*)))").FindAll().Properties.cn | ? { $_ -ne 'DRSVCENTRE'}
+
   $global:ADc = New-Object System.Collections.Generic.List[System.Object]
   $TempC = New-Object System.Collections.Generic.List[System.Object]
   $TempC.AddRange( ((Get-ADComputer -Filter { OperatingSystem -NotLike "*server*" } -prop description,location) | ? { $_.name -ne 'DRSVCENTRE' }) )
@@ -1320,8 +1270,8 @@ function LockoutStatusJob ($user) {
 
 function LockoutStatus ($user) {
   $DCs = New-Object System.Collections.Generic.List[System.Object]
-  $DCs.AddRange( (Get-ADDomainController -Filter * | Select -Skip 1) )
-  $DCs.AddRange( (Get-ADDomainController -Filter * -Server prd.aib.pri | Select -First 10) )
+  $DCs.AddRange( (Get-ADDomainController -Filter * | ? {$_.name -ne 'DRSGAMMADC1'} ) )
+  $DCs.AddRange( (Get-ADDomainController -Filter * -Server prd.aib.pri | Select -First 6) )
   $online = APing($DCs.hostname)
   Foreach ($DC in $online) {
     $t = Get-ADUser -Identity $user -Server $DC.Name -Properties AccountLockoutTime, LastBadPasswordAttempt, BadPwdCount, LockedOut, pwdLastSet, msDS-UserPasswordExpiryTimeComputed
@@ -1490,7 +1440,7 @@ function Check-PC($pc) { # take a look something is taking lots of times sometim
 }
 
 function New-DameWare($pc) {
-  $dw = "C:\Program Files (x86)\DameWare Development\DameWare Mini Remote Control\DWRCC.exe"
+  $dw = "C:\H\_Apps\DameWare Mini Remote Control\DWRCC.exe"
   $cmd = "-m:$pc -a:1" # -h -c"
   #iex  "&'$dw' $cmd"
   start "$dw" "$cmd"     
@@ -1632,6 +1582,7 @@ function Logged-User2 {
     $o
   }
 }
+
 
 
 function isLogged($pc = "$env:COMPUTERNAME") {
@@ -3120,6 +3071,58 @@ $pc | % {
 
 }
 
+function Scan-Updates {
+#Using WUA to Scan for Updates Offline with PowerShell  #VBS version: https://docs.microsoft.com/en-us/previous-versions/windows/desktop/aa387290(v=vs.85)  
+
+$path = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
+
+if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) 
+{ Start-Process powershell.exe -Verb RunAs "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"" ; exit }
+
+if (Test-Path "$path\wsusscn2.cab") { "File $path\wsusscn2.cab exist" } else { "Downloading $path\wsusscn2.cab exist"
+  # Turn on proxy for internet access
+  Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyServer -Value 'webcorp.prd.aib.pri:8082'
+  set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 1 
+  #Invoke-WebRequest -Uri "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -OutFile "$path\wsusscn2.cab"
+  Start-BitsTransfer -Source "http://download.windowsupdate.com/microsoftupdate/v6/wsusscan/wsusscn2.cab" -Destination "$path\wsusscn2.cab"
+  set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 0
+} 
+  
+Write-Output "Adding '$path\wsusscn2.cab' to UpdateServiceManager..." 
+$UpdateSession = New-Object -ComObject Microsoft.Update.Session  
+$UpdateServiceManager  = New-Object -ComObject Microsoft.Update.ServiceManager  
+$UpdateService = $UpdateServiceManager.AddScanPackageService("Offline Sync Service", "$path\wsusscn2.cab", 1)  
+$UpdateSearcher = $UpdateSession.CreateUpdateSearcher()   
+Write-Output "Searching for updates..."  
+$UpdateSearcher.ServerSelection = 3 #ssOthers 
+$UpdateSearcher.IncludePotentiallySupersededUpdates = $true # good for older OSes, to include Security-Only or superseded updates in the result list, otherwise these are pruned out and not returned as part of the final result list 
+$UpdateSearcher.ServiceID = $UpdateService.ServiceID.ToString()  
+$SearchResult = $UpdateSearcher.Search("IsInstalled=0") # or "IsInstalled=0 or IsInstalled=1" to also list the installed updates as MBSA did  
+$Updates = $SearchResult.Updates  
+
+$date = (Get-Date -F "yy-MM-dd HH-mm")
+
+$all = @( $Updates | % { $kb = ($_.Title | Select-String '(?<=\()[^]]+(?=\))' -AllMatches).Matches.Value; [PSCustomObject]@{ KB = $kb; Title = $_.Title  } } ) | sort kb -Descending
+$out = $all | % { $_.kb + "`t" + $_.Title }
+
+if($Updates.Count -eq 0){ "There are no applicable updates." | tee "$path\wsusscan $date.txt"
+ } else { Write-Output "List of applicable items on the machine when using wssuscan.cab:" }
+  
+$out | tee "$path\wsusscan $date.txt" -Append
+
+function Speak($text) {
+  Add-Type -AssemblyName System.speech
+  $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer
+  $speak.Rate = 3
+  $speak.Speak($text) 
+}
+
+if ( (Get-CimInstance -ClassName Win32_OperatingSystem).ProductType -eq 1) { Speak "Scan Complete" }  #Speak if we are on workstation
+
+#pause
+
+}
+
 function Get-CMCollectionOfDevice {
     [CmdletBinding()]
     [OutputType([int])]
@@ -3219,7 +3222,7 @@ function SCCM-refresh($pc){
   Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000002}”
   Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000003}”
   Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000021}”
-  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000102}”
+  # Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000102}”
   Invoke-CimMethod -Namespace 'root\ccm' -ClassName 'sms_client' -MethodName TriggerSchedule -Arguments @{sScheduleID="{00000000-0000-0000-0000-000000000002}"}
 }
 
