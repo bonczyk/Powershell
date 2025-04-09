@@ -310,7 +310,6 @@ function Test-Modules {
   Init
   $path = "$ModuleDir"  #"$ScriptPath\modules"
   #if ($ScriptPath -eq $ModulePath2) {$path = Split-Path (Split-Path $ScriptPath)}
-
   $modUNC = @{ ImportExcel = "$path\ImportExcel\7.4.1\ImportExcel.psd1"
                MSCatalog   = "$path\MSCatalog\MSCatalog.psd1"
              }
@@ -837,26 +836,6 @@ function Get-NewUpdateSCCM {
   % {  [PSCustomObject]@{ KB = [regex]::match($_.LocalizedDisplayName, 'KB(\d+)').value; Name = $_.LocalizedDisplayName; Description = $_.LocalizedDescription; Date = $_.DatePosted; } } |
   sort KB
  cd $SavedPath
-}
-
-function Test-Modules {
-  Init
-  $path = "$ModuleDir"  #"$ScriptPath\modules"
-  #if ($ScriptPath -eq $ModulePath2) {$path = Split-Path (Split-Path $ScriptPath)}
-
-  $modUNC = @{ ImportExcel = "$path\ImportExcel\7.4.1\ImportExcel.psd1"
-               MSCatalog   = "$path\MSCatalog\MSCatalog.psd1"
-             }
-  $ModUNC.keys.ForEach( { If (-not(Get-module $_)) { Import-Module $($ModUNC[$_]) -Global -WA SilentlyContinue } })
-}
-
-function ImportMe {
-  #iex ${using:function:ImportMe}.Ast.Extent.Text;ImportMe
-  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -WA SilentlyContinue
-  
-  #Import-Module "$ScriptPath\modules\MBMod\0.3\MBMod.psm1" -Force -Global -WarningAction SilentlyContinue
-
-  Init
 }
 
 function Get-CallingFileName {
