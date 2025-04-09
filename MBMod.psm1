@@ -21,7 +21,7 @@
 
 function Shared-pcs {
  $cts = Get-ADComputer -Filter {Description -like "CTS shared*"} -prop Description | select name,description
- $log = foreach ($pc in $cts.name) { Logged-User $pc } 
+ $log = $cts.name | % { Logged-User $_ } 
  $log | ft
 }
 
@@ -313,7 +313,7 @@ function Test-Modules {
   $modUNC = @{ ImportExcel = "$path\ImportExcel\7.4.1\ImportExcel.psd1"
                MSCatalog   = "$path\MSCatalog\MSCatalog.psd1"
              }
-  $ModUNC.keys.ForEach( { If (-not(Get-module $_)) { Import-Module $($ModUNC[$_]) -Global -WA SilentlyContinue } })
+  $ModUNC.keys | % { If (-not(Get-module $_)) { Import-Module $($ModUNC[$_]) -Global -WA SilentlyContinue } }
 }
 
 function ImportMe {
