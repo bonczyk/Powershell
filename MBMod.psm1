@@ -18,6 +18,396 @@
  
 #>
 
+function CRQ-Edge {
+
+$date = Get-Date
+$a = 'while ($Date.DayOfWeek -notin "Tuesday","Thursday") {$date = $date.AddDays(1);}'
+$ver = (Get-CMApplication -Fast -Name *Edge*).SoftwareVersion | sort | select -Last 1
+
+@"
+Microsoft Edge $ver
+
+Brief description of Change?
+
+The change involves the rollout of a new version of Microsoft Edge $ver to all company workstations. This update aims to enhance security, performance, and introduce new features.
+
+When is it scheduled to be implemented? (Start & End Dates/Times)
+
+$(Get-Date $date -f d) – Out to test PC
+$(Get-Date $date -f d) – Out to test Group
+$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) – Out to Group 1 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) – Out to Group 2 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 – approximately 25% of Dealers PC’s
+
+
+In the worst-case scenario, what services could be impacted?
+
+In the worst-case scenario, users might experience temporary disruption in accessing the web browser, which could impact web-based applications and services dependent on Edge.
+
+
+Has support from the required Teams for implementing/testing this Change been confirmed?
+
+Yes, support from the Dealing Room Support team, ready to assist during the implementation and testing phases.
+
+
+Are you aware of any possible impacts from this Change being implemented in the same time frame as other changes?
+
+There are no known conflicts with other scheduled changes during this time frame. Coordination has been done to ensure no overlap with other major updates or network maintenance activities.
+
+
+What validation (production testing post-deployment) will be carried out?
+
+The application package has already been tested on the test computer and user testing has been performed in Molesworth.
+
+
+Has the back-out plan in place been tested?
+
+Yes, the back-out plan includes reverting to the previous stable version of Microsoft Edge and ensuring all user data and settings are preserved.
+"@
+}
+
+
+function CRQ-CU {
+
+$date = Get-Date
+$a = 'while ($Date.DayOfWeek -notin "Tuesday","Thursday") {$date = $date.AddDays(1);}'
+
+@"
+$(Get-Date -f yyyy-MM) Monthly Updates required to maintain integrity and security of dealers desktops. 	
+
+
+Brief description of Change?
+
+The change involves the rollout of a new Microsoft Windows updatetes and patches to all dealers workstations. This update aims to enhance security, performance, and introduce new features.
+
+$($global:kbs.title -join "`n")                           
+
+
+When is it scheduled to be implemented? (Start & End Dates/Times)
+
+$(Get-Date $date -f d) – Out to test PC
+$(Get-Date $date -f d) – Out to test Group
+$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) – Out to Group 1 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) – Out to Group 2 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 – approximately 25% of Dealers PC’s
+
+
+In the worst-case scenario, what services could be impacted?
+
+In the worst-case scenario, users might experience issues with Windows 10
+
+
+Has support from the required Teams for implementing/testing this Change been confirmed?
+
+Yes, support from the Dealing Room Support team, ready to assist during the implementation and testing phases.
+
+
+Are you aware of any possible impacts from this Change being implemented in the same time frame as other changes?
+
+There are no known conflicts with other scheduled changes during this time frame. Coordination has been done to ensure no overlap with other major updates or network maintenance activities.
+
+
+What validation (production testing post-deployment) will be carried out?
+
+The application package has already been tested on the test computer and user testing has been performed in Molesworth.
+
+
+Has the back-out plan in place been tested?
+
+Yes, the back-out plan includes reverting to the previous state, uninstalling updates and ensuring all user data and settings are preserved.
+"@
+}
+
+function Pack-CU {
+  Save-NewUpdate
+  ExtractCabsFolder
+  Move-toCM
+  New-MSPapp
+  New-MSUapp
+  DeployToGroup
+}
+
+function Pack-Java {
+# Variables
+$Location = "\\drscmsrv2\e$\SoftwarePackages\Java\"
+$Path = (gci $Location "jre*.exe" -Recurse | sort LastAccessTime | select -Last 1).fullname
+$Path
+$SCCM = '\\drscmsrv2\e$\SoftwarePackages\Java'
+$SCCMSiteCode = 'DUB'
+$mountPath = '\\drscmsrv2\e$'
+
+$file = gci $path
+$info = (gci $path).VersionInfo
+
+# map SCCM server to move files
+if ((Get-SmbMapping).RemotePath -notcontains $mountPath) {
+  $freeletter = ls function:[d-z]: -n | ?{ !(test-path $_ -ErrorAction SilentlyContinue) } | select -Last 1 
+  $freeletter
+  $p = Read-Host "Password" 
+  $map = New-SmbMapping -LocalPath $freeletter -RemotePath \\drscmsrv1\e$ -UserName adm_58691 -Password $p
+}  
+
+# Move the downloaded file to the appropriate location
+$FileVer = $info.FileVersion
+$FileName = $file.Name
+$destinationfolder = "$SCCM\$FileVer"
+Write-Output "Downloaded version: $FileVer"
+Write-Output "Destination folder is $destinationfolder"
+
+$JavaVer3d = (($FileVer -split '\.')[2]).Substring(0,3)
+# $javaGUID = "{77924AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"
+$javaGUID2 = "{71024AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"
+
+IF (!(test-path $destinationfolder)) {
+    Write-Output "$destinationfolder does not exist"
+    [System.IO.Directory]::CreateDirectory($destinationfolder)
+    Write-Output "Creating $destinationfolder"
+    [System.IO.File]::Move($Path,"$destinationfolder\$Filename")
+    Write-Output "Moving $Path to $destinationfolder"
+
+    $SavedPath = $(pwd)
+    # IF (!(Get-WindowsFeature RSAT-AD-PowerShell).installed) {Add-WindowsFeature RSAT-AD-PowerShell}
+    # IF (!(Get-Module ConfigurationManager)) {Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)}
+    Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
+    IF ($(pwd).path -ne "$SCCMSiteCode`:\") {Set-Location "$SCCMSiteCode`:"}
+
+    IF (!(Get-CMDeploymentType -ApplicationName "Java" -DeploymentTypeName "Java $FileVer")) {
+        Write-Output "No deployment type exists for Java - $FileVer"
+
+    $newApp = @{ Name        = "Java $FileVer"
+                 Description = "$($info.FileDescription) - $($FileVer) - $($JavaVer3d) - $($javaGUID)"
+                 Publisher = $info.CompanyName
+                 SoftwareVersion = $FileVer
+                 IconLocationFile = '\\drscmsrv2\e$\SoftwarePackages\_ico\java_original_logo_icon_146458.png'
+    }
+    $newApp | ft
+    New-CMApplication @newApp | Select LocalizedDescription, LocalizedDisplayName
+
+    $addMsi = @{ ApplicationName = "Java $FileVer"
+                 DeploymentTypeName = "DT_Java_$FileVer"
+                 InstallCommand = 'Java.bat'
+                 ContentLocation = "$destinationfolder"
+                 InstallationBehaviorType = 'InstallForSystem' 
+                 EstimatedRuntimeMins = 5 
+                 LogonRequirementType = 'WhetherOrNotUserLoggedOn'
+                 ScriptLanguage       = 'PowerShell'
+                 ScriptText           = ''
+                 Comment              = "$(get-date) - $($FileName) - $($JavaVer3d)"  
+    }
+    $addMsi | ft
+    Add-CMScriptDeploymentType @addMsi | Select LocalizedDescription, LocalizedDisplayName
+    $cl1 = New-CMDetectionClauseWindowsInstaller -ProductCode $javaGUID -Existence
+    Set-CMScriptDeploymentType -ApplicationName "Java $FileVer" -DeploymentTypeName "DT_Java_$FileVer" -AddDetectionClause $cl1
+    $a = Get-CMApplication -Name "Java $FileVer"
+    Move-CMObject -FolderPath "DUB:\Application\Java" -InputObject $a
+
+    "Add files to deployment folder"
+    cd c: ; ii $Location 
+    pause
+    Start-CMContentDistribution -ApplicationName "Java $FileVer" -DistributionPointName 'drscmsrv2.dealers.aib.pri' -DistributionPointGroupName 'AllDP'
+
+   $NewDep = @{ ApplicationName = "Java $FileVer"
+                CollectionName = "Test_MB"
+                AvailableDateTime = get-date -Hour 22 -Minute 15
+                DeadlineDateTime = get-date
+                DeployAction = "Install"                
+                DeployPurpose = "Required"
+                UserNotification = "DisplaySoftwareCenterOnly"
+                SendWakeupPacket = $true  
+                PersistOnWriteFilterDevice = $false
+    }
+    $NewDep | ft
+    New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
+    Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "Test_MB"
+    }
+ Set-Location $SavedPath
+ } ELSE { Write-Output "$destinationfolder already exists" }    
+}
+
+function Pack-Edge {
+#  Create SCCM EDGE application and deployment
+
+#Variables
+$Path = "\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE\MicrosoftEdgeEnterpriseX64.msi"
+$SCCM = '\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE'
+$SCCMSiteCode = 'DUB'
+$mountPath = '\\drscmsrv2\e$'
+
+# Get file metadata
+function Get-FileDetails($path) {
+  $objShell = New-Object -ComObject Shell.Application 
+  $objFolder = $objShell.namespace((Get-Item $path).DirectoryName) 
+  foreach ($File in $objFolder.items()) {
+    If ($file.path -eq $path) {
+        $FileMetaData = New-Object PSOBJECT 
+        for ($a=0 ; $a -le 266; $a++) {  
+         if($objFolder.getDetailsOf($File, $a)) { 
+             $hash += @{$($objFolder.getDetailsOf($objFolder.items, $a)) = $($objFolder.getDetailsOf($File, $a)) }
+            $FileMetaData | Add-Member $hash 
+            $hash.clear()  
+           } 
+        }
+    }
+  }
+return $FileMetaData
+}
+
+$Meta = Get-FileDetails $Path
+
+# map SCCM server to move files
+if ((Get-SmbMapping).RemotePath -notcontains $mountPath) {
+  $freeletter = ls function:[d-z]: -n | ?{ !(test-path $_ -ErrorAction SilentlyContinue) } | select -Last 1 
+  $freeletter
+  $p = Read-Host "Password" 
+  $map = New-SmbMapping -LocalPath $freeletter -RemotePath \\drscmsrv2\e$ -UserName adm_58691 -Password $p
+}  
+
+# Move the downloaded file to the appropriate location
+$EDGEVersion = $Meta.Comments.split(' ')[0]
+Write-Output "Downloaded version: $EdgeVersion"
+$Filename = $((get-item $Path).name)
+$destinationfolder = "$SCCM\$EdgeVersion"
+Write-Output "Destination folder is $destinationfolder"
+
+IF (!(test-path $destinationfolder)) {
+    Write-Output "$destinationfolder does not exist"
+    [System.IO.Directory]::CreateDirectory($destinationfolder)
+    Write-Output "Creating $destinationfolder"
+    [System.IO.File]::Move($Path,"$destinationfolder\$Filename")
+    Write-Output "Moving $Path to $destinationfolder"
+
+    $SavedPath = $(pwd)
+    # IF (!(Get-WindowsFeature RSAT-AD-PowerShell).installed) {Add-WindowsFeature RSAT-AD-PowerShell}
+    # IF (!(Get-Module ConfigurationManager)) {Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)}
+    Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
+    IF ($(pwd).path -ne "$SCCMSiteCode`:\") {Set-Location "$SCCMSiteCode`:"}
+
+    IF (!(Get-CMDeploymentType -ApplicationName "Ms Edge" -DeploymentTypeName "Microsoft Edge - $EdgeVersion")) {
+        Write-Output "No deployment type exists for Microsoft Edge - $EdgeVersion"
+
+    $newApp = @{ Name        = "Microsoft Edge $EdgeVersion"
+                 Description = "Microsoft Edge Installer"
+                 Publisher = 'Microsoft'
+                 SoftwareVersion = $EdgeVersion
+                 IconLocationFile = '\\drscmsrv2\e$\SoftwarePackages\_ico\edge_browser.png'
+    }
+    New-CMApplication @newApp | Select LocalizedDescription, LocalizedDisplayName
+
+    $addMsi = @{ ApplicationName = "Microsoft Edge $EdgeVersion"
+                 ContentLocation = "$destinationfolder\$filename"
+                 Comment = "$(get-date)"
+                 DeploymentTypeName = "DT_Edge_$EdgeVersion"
+                 InstallationBehaviorType = 'InstallForSystem' 
+                 InstallCommand = "msiexec /i $filename /qn"
+                 MaximumRuntimeMins = 15
+                 EstimatedRuntimeMins = 5 
+    
+    }
+    Add-CMMsiDeploymentType @addMsi | Select LocalizedDescription, LocalizedDisplayName
+
+    $a = Get-CMApplication -Name "Microsoft Edge $EdgeVersion"
+    Move-CMObject -FolderPath "DUB:\Application\Microsoft Edge" -InputObject $a
+
+    Start-CMContentDistribution -ApplicationName "Microsoft Edge $EdgeVersion" -DistributionPointName 'drscmsrv2.dealers.aib.pri' -DistributionPointGroupName 'AllDP'
+
+   $NewDep = @{ ApplicationName = "Microsoft Edge $EdgeVersion"
+                CollectionName = "Test_MB"
+                AvailableDateTime = get-date -Hour 20 -Minute 3
+                DeadlineDateTime = get-date
+                DeployAction = "Install"                
+                DeployPurpose = "Required"
+                UserNotification = "DisplaySoftwareCenterOnly"
+                SendWakeupPacket = $true  
+                PersistOnWriteFilterDevice = $false
+    }
+    New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
+    $NewDep.CollectionName = "SCCM Pre-Test Group"
+    New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
+    $NewDep.CollectionName = "SCCM Test Group"
+    New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
+
+    Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "Test_MB"
+    Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "SCCM Pre-Test Group"
+    Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "SCCM Test Group"
+
+
+    }
+
+    Set-Location $SavedPath
+ } ELSE { Write-Output "$destinationfolder already exists"
+}    
+}
+
+function Pack-Calypso([switch]$hex) {
+ $fpath = '\\drscmsrv2\e$\SoftwarePackages\Calypso\'
+ if ($hex) {$ex='_hex'} else {$ex=''}
+ $fname = (gci "$fpath\*TR??$ex" | sort CreationTime -Descending | select -first 1).name  
+ $TRver = ($fname | Select-String "TR(\d{2})").Matches.value 
+ $path = Join-Path $fpath $fname   #$Ver = Split-Path $path -Leaf
+ $AppName = "Calypso $fname"       #$Ver -match "\d*TR\d\d.*"; $tr = $Matches[0]; 
+ cd c:
+ $DetectionFile = gci "$path\client\TR*.txt" -Name
+ "$path `nDetectionFile is $DetectionFile - Preparing package - $appname - $fname - $TRver"
+ pause
+ Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); cd "DUB:\"
+ $newApp = @{ Name         = $AppName 
+              Description = "Calypso $fname $(get-date)" 
+              Publisher   = 'AIB DRS'
+              SoftwareVersion = $fname
+              IconLocationFile = "\\drscmsrv2\e$\SoftwarePackages\Calypso\calypso.png" }
+ $app = Get-CMApplication -Fast -Name $Appname
+ if (!($app)) { $app = New-CMApplication @newApp }
+ $app | Select LocalizedDisplayName, LocalizedDescription
+ $addDT = @{ ApplicationName    = $Appname
+              DeploymentTypeName = "DT_$Appname"
+              InstallCommand     = 'powershell.exe -ExecutionPolicy Bypass -Command .\SCCM-CalypsoJob.ps1'
+              ContentLocation    = $path
+        InstallationBehaviorType = 'InstallForSystem'
+            EstimatedRuntimeMins = 10
+            LogonRequirementType = 'WhetherOrNotUserLoggedOn'
+              ScriptLanguage     = 'PowerShell'
+              ScriptText         = ''
+              Comment            = "$(get-date) - $AppName"
+ }
+ Add-CMScriptDeploymentType @addDT | Select LocalizedDisplayName, LocalizedDescription
+ $cl1 = New-CMDetectionClauseFile -FileName $DetectionFile -Path "%ProgramFiles%\CalypsoThickClient\client" -Existence
+ Set-CMScriptDeploymentType -ApplicationName $Appname -DeploymentTypeName "DT_$Appname" -AddDetectionClause $cl1
+ Move-CMObject -FolderPath "DUB:\Application\Calypso" -InputObject $app 
+ Start-CMContentDistribution -InputObject $app -DistributionPointName 'drscmsrv2.dealers.aib.pri' -ErrorAction SilentlyContinue -DistributionPointGroupName 'AllDP'
+
+<#
+unpack to cmsrv
+run prep calypso on folders
+add HomeUserFolder
+add current prop file
+add TRXX.txt for detection method
+create a package in sccm
+distribute
+deploy to test calypso pc
+same for TRxx_hex and add jstack2.bat to bin and start jstack2.bat to Navigator(Pre)Prod.bat
+#>
+}
+
+function Get-UDVariable {
+  get-variable | where-object {(@(
+    "FormatEnumerationLimit",
+    "MaximumAliasCount",
+    "MaximumDriveCount",
+    "MaximumErrorCount",
+    "MaximumFunctionCount",
+    "MaximumVariableCount",
+    "PGHome",
+    "PGSE",
+    "PGUICulture",
+    "PGVersionTable",
+    "PROFILE",
+    "PSSessionOption"
+    ) -notcontains $_.name) -and `
+    (([psobject].Assembly.GetType('System.Management.Automation.SpecialVariables').GetFields('NonPublic,Static') | Where-Object FieldType -eq ([string]) | ForEach-Object GetValue $null)) -notcontains $_.name
+    }
+}
 
 function Shared-pcs {
  $cts = Get-ADComputer -Filter {Description -like "CTS shared*"} -prop Description | select name,description
@@ -594,7 +984,7 @@ function Get-EdgeDriver($dir='C:\Selenium\src'){
 function Get-DesktopUpdates { # Save-MSCatalogUpdate
   Test-Modules
   Set-Proxy 1
-  Sleep -Seconds 1
+  Sleep -Seconds 2
   $Last30Days = {$_.LastUpdated -gt (Get-Date).AddDays(-20)}
   $d =  @(Get-MSCatalogUpdate -Search "Cumulative*Windows 10*22H2*x64" -Strict -ExcludePreview | ? { $_.Title -notlike "*Dynamic*" -and  $_.Title -notlike "*4.8.1*" } | ? $Last30Days)
   #$d += Get-MSCatalogUpdate -Search "Update*2016*32" -Strict | ? $Last30Days
@@ -617,22 +1007,6 @@ function Get-ServerUpdates {
  $o += Get-MSCatalogUpdate -Search "Servicing Stack Update for Windows Server*x64" -Strict -SortBy Products -AllPages | ? $Last30Days
  $o | ? { $_.Products -in @("Windows Server 2012 R2","Windows Server 2016","Windows Server 2019")} | sort Title -Unique | sort Products | tee -Variable global:SrvKB
  Set-Proxy 0
-}
-
-function Calypso-pack {
-Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); cd "DUB:\"
-<#
-unpack to cmsrv
-run prep calypso on folders
-add HomeUserFolder
-add current prop file
-add TRXX.txt for detection method
-create a package in sccm
-distribute
-deploy to test calypso pc
-same for TRxx_hex and add jstack2.bat to bin and start jstack2.bat to Navigator(Pre)Prod.bat
-#>
-
 }
 
 function New-MSPapp($a){
@@ -779,19 +1153,6 @@ function Move-toCM($path='C:\Temp\updates\') {
   move $file "$pathCM\$info"
  }
 }
-
-function New-Test {
-  Save-NewUpdate
-  ExtractCabsFolder
-  Move-toCM
-  New-MSPapp
-  New-MSUapp
-  DeployToGroup
-}
-
-# DeployToGroup -Apps "*KB5002519*" -Collection 'ZeroDay_2024_02' 
-# jesli brak czasu jest as soon as possible
-# DeployToGroup -Collection 'Feb_patches'
 
 function DeployToGroup($Apps="$(Get-Date –f yyyy-MM)-*",
     [Parameter(Mandatory=$False)][ValidateSet('SCCM Pre-Test Group','SCCM Test Group','SCCM Group 1','SCCM Group 2','SCCM Group 3','SCCM Group 4')]
@@ -3524,7 +3885,7 @@ function DisableIPv6Dealers {
   [PSCustomObject]@{PC=$_; Reg=(Get-RemoteReg $_ LocalMachine 'SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\' 'DisabledComponents') } }
 }
 
-function Run-CMActions { # SCCM all
+function SCCM-AllActions { # SCCM all
  $CPApplet = New-Object -Comobject CPApplet.CPAppletMgr
  $Actions  = $CPApplet.GetClientActions()
  ForEach ($Action in $Actions) {   $Action.PerformAction()  } 
