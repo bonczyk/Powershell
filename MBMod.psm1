@@ -1,4 +1,4 @@
-<#
+﻿<#
  Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"; cd DUB:
  Import-Module "\\drsitsrv1\DRSsupport$\Projects\2022\Test-BCS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
@@ -30,7 +30,7 @@ function Pack-CU {
   Move-toCM
   New-MSPapp
   New-MSUapp
-  DeployToGroup
+  CM-Deploy
 }
 
 function Pack-Java {
@@ -57,14 +57,15 @@ function Pack-Java {
   }
 
   # Load SCCM Module and Map Drive
-  SCCM-MapDrive
-  SCCM-LoadModule
+  CM-MapDrive
+
+  CM-LoadModule
 
   # Check if deployment already exists
   if (-not (Get-CMDeploymentType -ApplicationName "Java" -DeploymentTypeName "Java $FileVer")) {
     Write-Output "No deployment type exists for Java - $FileVer"
 
-    # Use SCCM-NewApp for simplified SCCM application creation
+    # Use CM-NewApp for simplified SCCM application creation
     $NewAppParams = @{
       AppName              = "Java $FileVer"
       Description          = "$($Info.FileDescription) - $FileVer"
@@ -78,11 +79,11 @@ function Pack-Java {
       DPGroupName          = "AllDP"
       EstimatedRuntimeMins = 10
     }
-    SCCM-NewApp @NewAppParams
+    CM-NewApp @NewAppParams
 
     # Distribute and deploy the application
     Start-CMContentDistribution -ApplicationName "Java $FileVer" -DistributionPointName 'drscmsrv2.dealers.aib.pri' -DistributionPointGroupName 'AllDP'
-    DeployToGroup -Apps "Java $FileVer" -Collection "Test_MB" -Now
+    CM-Deploy -Apps "Java $FileVer" -Collection "Test_MB" -Now
     Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "Test_MB"
   }
   else {
@@ -99,7 +100,8 @@ function Pack-Java {
   $info = (gci $path).VersionInfo
   hl "Downloaded version: $EdgeVersion" $EdgeVersion 
   hl "Destination folder: $destinationfolder" "$destinationfolder" 
-  SCCM-MapDrive
+  CM-MapDrive
+
 
   $FileVer = $info.FileVersion
   $FileName = $file.Name
@@ -115,7 +117,7 @@ function Pack-Java {
     [System.IO.Directory]::CreateDirectory($destinationfolder); Write-Output "Moving $Path to $destinationfolder"  
     [System.IO.File]::Move($Path, "$destinationfolder\$Filename")  
   }
-  SCCM-LoadModule
+  CM-LoadModule
   IF (!(Get-CMDeploymentType -ApplicationName "Java" -DeploymentTypeName "Java $FileVer")) {
     Write-Output "No deployment type exists for Java - $FileVer"
 
@@ -169,7 +171,8 @@ function Pack-Java {
   Set-Location $SavedPath
 }   
 
-function Pack-Edge($Path = "\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE\", $SCCM = '\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE') {
+function Pack-Edge {
+  param ( [string]$Path = "\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE\", [string]$SCCM = "\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE" )
   cd C:
   $path = (gci -Path $Path -Filter *.msi -Recurse | sort LastWriteTime | select -Last 1).FullName
   $Meta = Get-FileDetails $Path   
@@ -178,14 +181,15 @@ function Pack-Edge($Path = "\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE\", $S
   $destinationfolder = "$SCCM\$EdgeVersion";
   hl "Downloaded version: $EdgeVersion" $EdgeVersion 
   hl "Destination folder: $destinationfolder" "$destinationfolder" 
-  SCCM-MapDrive
+  CM-MapDrive
+
   IF (!(test-path $destinationfolder)) {
     hl "Creating $destinationfolder" "$destinationfolder"
     [System.IO.Directory]::CreateDirectory($destinationfolder); Write-Output "Moving $Path to $destinationfolder"  
     [System.IO.File]::Move($Path, "$destinationfolder\$Filename")  
   }
   $SavedPath = $(pwd)
-  SCCM-LoadModule
+  CM-LoadModule
   IF ((Get-CMDeploymentType -ApplicationName "Microsoft Edge $EdgeVersion" -DeploymentTypeName "DT_Edge_$EdgeVersion")) { hl "Already exist Microsoft Edge - $EdgeVersion" "Microsoft Edge - $EdgeVersion"; break }
   $NewApp = @{
     AppName              = "Microsoft Edge $EdgeVersion"
@@ -200,9 +204,9 @@ function Pack-Edge($Path = "\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE\", $S
     DPGroupName          = "AllDP"
     EstimatedRuntimeMins = 10 
   }
-  SCCM-NewApp @NewApp
+  CM-NewApp @NewApp
   <#
-  SCCM-NewApp `
+  CM-NewApp `
     -AppName     "Microsoft Edge $EdgeVersion" `
     -Description "Microsoft Edge Installer" `
     -Publisher   "Microsoft" `
@@ -216,13 +220,14 @@ function Pack-Edge($Path = "\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE\", $S
     -EstimatedRuntimeMins 10
 #>
   $grp = "Test_MB", "SCCM Pre-Test Group", "SCCM Test Group"
-  $grp[0..1] | % { DeployToGroup -Apps "Microsoft Edge $EdgeVersion" -Collection $_ -Now -WhatIf }
-  DeployToGroup -Apps "Microsoft Edge $EdgeVersion" -Collection 'SCCM Test Group' 
+  $grp[0..1] | % { CM-Deploy -Apps "Microsoft Edge $EdgeVersion" -Collection $_ -Now -WhatIf }
+  CM-Deploy -Apps "Microsoft Edge $EdgeVersion" -Collection 'SCCM Test Group' 
   $grp | % { Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName $_ }
   cd $SavedPath 
 } 
 
-function Pack-Calypso([switch]$hex) {
+function Pack-Calypso {
+  param ( [switch]$hex )
   $fpath = '\\drscmsrv2\e$\SoftwarePackages\Calypso\'
   if ($hex) { $ex = '_hex' } else { $ex = '' }
   $fname = (gci "$fpath\*TR??$ex" | sort CreationTime -Descending | select -first 1).name  
@@ -273,7 +278,7 @@ same for TRxx_hex and add jstack2.bat to bin and start jstack2.bat to Navigator(
 #>
 } 
 
-function SCCM-NewApp {
+function CM-NewApp {
   param (
     [Parameter(Mandatory)][string]$AppName,
     [Parameter(Mandatory)][string]$Description,
@@ -317,7 +322,7 @@ function SCCM-NewApp {
   elseif ($DPGroupName) { Start-CMContentDistribution -InputObject $app -DistributionPointGroupName $DPGroupName -ErrorAction SilentlyContinue }
 }
 
-function SCCM-MapDrive {
+function CM-MapDrive {
   param ($RemotePath = '\\drscmsrv2\e$', $UserName = 'adm_58691', $freeletter = ( ls function:[d-z]: -n | ? { !(Test-Path $_ -EA SilentlyContinue) } | select -Last 1) )
   if ((Get-SmbMapping).RemotePath -notcontains $RemotePath) {
     if ($freeletter) {
@@ -329,12 +334,12 @@ function SCCM-MapDrive {
   else { Write-Host "Path already mapped." }
 }
 
-function SCCM-LoadModule($SCCMSiteCode = 'DUB') {
+function CM-LoadModule($SCCMSiteCode = 'DUB') {
   Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
   IF ($(pwd).path -ne "$SCCMSiteCode`:\") { Set-Location "$SCCMSiteCode`:" }
 }
 
-function DeployToGroup {   
+function CM-Deploy {   
   param ( [string]$Apps = "$(Get-Date -f yyyy-MM)-*",
     [Parameter(Mandatory = $False)][ValidateSet('SCCM Pre-Test Group', 'SCCM Test Group', 'SCCM Group 1', 'SCCM Group 2', 'SCCM Group 3', 'SCCM Group 4', 'Test_MB')]
     [string]$Collection = 'SCCM Pre-Test Group',
@@ -367,7 +372,7 @@ function DeployToGroup {
   }; c:
 }
 
-function Get-UDVariable {
+function Get-UserVariable {
   get-variable | where-object { (@(
         "FormatEnumerationLimit",
         "MaximumAliasCount",
@@ -774,7 +779,6 @@ Yes, the back-out plan includes reverting to the previous state, uninstalling up
 "@
 }
 
-
 function Change-Password {
   #explorer.exe shell:::{2559a1f2-21d7-11d4-bdaf-00c04f60b9f0}
 (New-Object -ComObject "Shell.Application").WindowsSecurity()
@@ -802,7 +806,6 @@ function ImportMe {
   #Import-Module "$ScriptPath\modules\MBMod\0.3\MBMod.psm1" -Force -Global -WarningAction SilentlyContinue
   Init
 }
-
 
 function Get-CallingFileName {
   $cStack = @(Get-PSCallStack | ? { $_.ScriptName -and $_.ScriptName -notlike "*MBMod.psm1*" } )
@@ -2021,8 +2024,6 @@ function Logged-User2 {
     $o
   }
 }
-
-
 
 function isLogged($pc = "$env:COMPUTERNAME") {
   $i = 0; $user = $null; $r = $null
