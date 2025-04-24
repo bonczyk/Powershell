@@ -24,107 +24,6 @@ $CompressedByteArray = $MemoryStream.ToArray()
 
 #>
 
-function CRQ-Edge {
-
-  $date = Get-Date
-  $a = 'while ($Date.DayOfWeek -notin "Tuesday","Thursday") {$date = $date.AddDays(1);}'
-  $ver = (Get-CMApplication -Fast -Name *Edge*).SoftwareVersion | sort | select -Last 1
-
-  @"
-Microsoft Edge $ver
-
-Brief description of Change?
-
-The change involves the rollout of a new version of Microsoft Edge $ver to all company workstations. This update aims to enhance security, performance, and introduce new features.
-
-When is it scheduled to be implemented? (Start & End Dates/Times)
-
-$(Get-Date $date -f d) – Out to test PC
-$(Get-Date $date -f d) – Out to test Group
-$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) – Out to Group 1 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) – Out to Group 2 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 – approximately 25% of Dealers PC’s
-
-
-In the worst-case scenario, what services could be impacted?
-
-In the worst-case scenario, users might experience temporary disruption in accessing the web browser, which could impact web-based applications and services dependent on Edge.
-
-
-Has support from the required Teams for implementing/testing this Change been confirmed?
-
-Yes, support from the Dealing Room Support team, ready to assist during the implementation and testing phases.
-
-
-Are you aware of any possible impacts from this Change being implemented in the same time frame as other changes?
-
-There are no known conflicts with other scheduled changes during this time frame. Coordination has been done to ensure no overlap with other major updates or network maintenance activities.
-
-
-What validation (production testing post-deployment) will be carried out?
-
-The application package has already been tested on the test computer and user testing has been performed in Molesworth.
-
-
-Has the back-out plan in place been tested?
-
-Yes, the back-out plan includes reverting to the previous stable version of Microsoft Edge and ensuring all user data and settings are preserved.
-"@
-}
-
-function CRQ-CU {
-
-  $date = Get-Date
-  $a = 'while ($Date.DayOfWeek -notin "Tuesday","Thursday") {$date = $date.AddDays(1);}'
-
-  @"
-$(Get-Date -f yyyy-MM) Monthly Updates required to maintain integrity and security of dealers desktops. 	
-
-
-Brief description of Change?
-
-The change involves the rollout of a new Microsoft Windows updatetes and patches to all dealers workstations. This update aims to enhance security, performance, and introduce new features.
-
-$($global:kbs.title -join "`n")                           
-
-
-When is it scheduled to be implemented? (Start & End Dates/Times)
-
-$(Get-Date $date -f d) – Out to test PC
-$(Get-Date $date -f d) – Out to test Group
-$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) – Out to Group 1 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) – Out to Group 2 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 – approximately 25% of Dealers PC’s
-
-
-In the worst-case scenario, what services could be impacted?
-
-In the worst-case scenario, users might experience issues with Windows 10
-
-
-Has support from the required Teams for implementing/testing this Change been confirmed?
-
-Yes, support from the Dealing Room Support team, ready to assist during the implementation and testing phases.
-
-
-Are you aware of any possible impacts from this Change being implemented in the same time frame as other changes?
-
-There are no known conflicts with other scheduled changes during this time frame. Coordination has been done to ensure no overlap with other major updates or network maintenance activities.
-
-
-What validation (production testing post-deployment) will be carried out?
-
-The application package has already been tested on the test computer and user testing has been performed in Molesworth.
-
-
-Has the back-out plan in place been tested?
-
-Yes, the back-out plan includes reverting to the previous state, uninstalling updates and ensuring all user data and settings are preserved.
-"@
-}
-
 function Pack-CU {
   Save-NewUpdate
   ExtractCabsFolder
@@ -177,6 +76,7 @@ function SCCM-NewApp {
   if ($DPName) { Start-CMContentDistribution -InputObject $app -DistributionPointName $DPName -ErrorAction SilentlyContinue }
   elseif ($DPGroupName) { Start-CMContentDistribution -InputObject $app -DistributionPointGroupName $DPGroupName -ErrorAction SilentlyContinue }
 }
+
 function Pack-Java {
   param (
     [string]$Location = "\\drscmsrv2\e$\SoftwarePackages\Java\",
@@ -239,6 +139,7 @@ function Pack-Java {
     Write-Output "Deployment type for Java $FileVer already exists."
   }
 }
+
 function Pack-Java {
   $Location = "\\drscmsrv2\e$\SoftwarePackages\Java\"
   $Path = (gci $Location "jre*.exe" -Recurse | sort LastAccessTime | select -Last 1).fullname
@@ -777,6 +678,108 @@ function Main {
 }
 
 Main
+
+function CRQ-Edge {
+
+  $date = Get-Date
+  $a = 'while ($Date.DayOfWeek -notin "Tuesday","Thursday") {$date = $date.AddDays(1);}'
+  $ver = (Get-CMApplication -Fast -Name *Edge*).SoftwareVersion | sort | select -Last 1
+
+  @"
+Microsoft Edge $ver
+
+Brief description of Change?
+
+The change involves the rollout of a new version of Microsoft Edge $ver to all company workstations. This update aims to enhance security, performance, and introduce new features.
+
+When is it scheduled to be implemented? (Start & End Dates/Times)
+
+$(Get-Date $date -f d) – Out to test PC
+$(Get-Date $date -f d) – Out to test Group
+$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) – Out to Group 1 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) – Out to Group 2 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 – approximately 25% of Dealers PC’s
+
+
+In the worst-case scenario, what services could be impacted?
+
+In the worst-case scenario, users might experience temporary disruption in accessing the web browser, which could impact web-based applications and services dependent on Edge.
+
+
+Has support from the required Teams for implementing/testing this Change been confirmed?
+
+Yes, support from the Dealing Room Support team, ready to assist during the implementation and testing phases.
+
+
+Are you aware of any possible impacts from this Change being implemented in the same time frame as other changes?
+
+There are no known conflicts with other scheduled changes during this time frame. Coordination has been done to ensure no overlap with other major updates or network maintenance activities.
+
+
+What validation (production testing post-deployment) will be carried out?
+
+The application package has already been tested on the test computer and user testing has been performed in Molesworth.
+
+
+Has the back-out plan in place been tested?
+
+Yes, the back-out plan includes reverting to the previous stable version of Microsoft Edge and ensuring all user data and settings are preserved.
+"@
+}
+
+function CRQ-CU {
+
+  $date = Get-Date
+  $a = 'while ($Date.DayOfWeek -notin "Tuesday","Thursday") {$date = $date.AddDays(1);}'
+
+  @"
+$(Get-Date -f yyyy-MM) Monthly Updates required to maintain integrity and security of dealers desktops. 	
+
+
+Brief description of Change?
+
+The change involves the rollout of a new Microsoft Windows updatetes and patches to all dealers workstations. This update aims to enhance security, performance, and introduce new features.
+
+$($global:kbs.title -join "`n")                           
+
+
+When is it scheduled to be implemented? (Start & End Dates/Times)
+
+$(Get-Date $date -f d) – Out to test PC
+$(Get-Date $date -f d) – Out to test Group
+$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) – Out to Group 1 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) – Out to Group 2 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 – approximately 25% of Dealers PC’s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 – approximately 25% of Dealers PC’s
+
+
+In the worst-case scenario, what services could be impacted?
+
+In the worst-case scenario, users might experience issues with Windows 10
+
+
+Has support from the required Teams for implementing/testing this Change been confirmed?
+
+Yes, support from the Dealing Room Support team, ready to assist during the implementation and testing phases.
+
+
+Are you aware of any possible impacts from this Change being implemented in the same time frame as other changes?
+
+There are no known conflicts with other scheduled changes during this time frame. Coordination has been done to ensure no overlap with other major updates or network maintenance activities.
+
+
+What validation (production testing post-deployment) will be carried out?
+
+The application package has already been tested on the test computer and user testing has been performed in Molesworth.
+
+
+Has the back-out plan in place been tested?
+
+Yes, the back-out plan includes reverting to the previous state, uninstalling updates and ensuring all user data and settings are preserved.
+"@
+}
+
 
 function Change-Password {
   #explorer.exe shell:::{2559a1f2-21d7-11d4-bdaf-00c04f60b9f0}
