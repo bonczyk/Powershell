@@ -2,7 +2,7 @@
  Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"; cd DUB:
  Import-Module "\\drsitsrv1\DRSsupport$\Projects\2022\Test-BCS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
- Import-Module "\\fxt8\c$\H\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
+ Import-Module ".\MBMod.psm1" -Force -WarningAction SilentlyContinue
  [Management.Automation.WildcardPattern]::Escape('test[1].txt (foo)')
  [regex]::Escape("test[1].txt (foo)")
  Run-Remote $pc "powershell -command `"Start-Transcript c:\temp\log_appx.txt; Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Edge*\`" }; Stop-Transcript`""
@@ -639,12 +639,12 @@ function Get-Drama {
 
 function secStr($s) {
 
-  $m = ConvertTo-SecureString 'Dr11ms11' -AsPlainText -Force
+  $m = ConvertTo-SecureString 'pss' -AsPlainText -Force
   $kod = $m | ConvertFrom-SecureString
   $q = $kod | ConvertTo-SecureString
   $q.Length
 
-  $SecurePassword = ConvertTo-SecureString 'Dr11ms11' -AsPlainText -Force
+  $SecurePassword = ConvertTo-SecureString 'pss' -AsPlainText -Force
   $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecurePassword)
   $UnsecurePassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
   [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
