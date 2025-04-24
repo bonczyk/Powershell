@@ -171,7 +171,67 @@ param (
     if ($DPName) { Start-CMContentDistribution -InputObject $app -DistributionPointName $DPName -ErrorAction SilentlyContinue }
     elseif ($DPGroupName) { Start-CMContentDistribution -InputObject $app -DistributionPointGroupName $DPGroupName -ErrorAction SilentlyContinue }
 }
+function Pack-Java {
+    param (
+        [string]$Location = "\\drscmsrv2\e$\SoftwarePackages\Java\",
+        [string]$SCCM = "\\drscmsrv2\e$\SoftwarePackages\Java"
+    )
+    
+    # Locate the latest Java installer
+    $Path = (Get-ChildItem -Path $Location -Filter "jre*.exe" -Recurse | Sort-Object LastAccessTime | Select-Object -Last 1).FullName
+    if (-not $Path) {
+        Write-Error "No Java installer found in $Location"
+        return
+    }
 
+    $File = Get-Item $Path
+    $Info = $File.VersionInfo
+    $FileVer = $Info.FileVersion
+    $DestinationFolder = Join-Path -Path $SCCM -ChildPath $FileVer
+
+    # Log details
+    Write-Output "Downloaded version: $FileVer"
+    Write-Output "Destination folder is $DestinationFolder"
+
+    # Ensure the destination folder exists
+    if (-not (Test-Path $DestinationFolder)) {
+        Write-Output "Creating destination folder: $DestinationFolder"
+        New-Item -ItemType Directory -Path $DestinationFolder -Force
+        Move-Item -Path $Path -Destination (Join-Path -Path $DestinationFolder -ChildPath $File.Name)
+    }
+
+    # Load SCCM Module and Map Drive
+    SCCM-MapDrive
+    SCCM-LoadModule
+
+    # Check if deployment already exists
+    if (-not (Get-CMDeploymentType -ApplicationName "Java" -DeploymentTypeName "Java $FileVer")) {
+        Write-Output "No deployment type exists for Java - $FileVer"
+
+        # Use SCCM-NewApp for simplified SCCM application creation
+        $NewAppParams = @{
+            AppName              = "Java $FileVer"
+            Description          = "$($Info.FileDescription) - $FileVer"
+            Publisher            = $Info.CompanyName
+            SoftwareVersion      = $FileVer
+            Icon                 = '\\drscmsrv2\e$\SoftwarePackages\_ico\java_original_logo_icon_146458.png'
+            ContentLocation      = $DestinationFolder
+            InstallCommand       = "Java.bat"
+            DTName               = "DT_Java_$FileVer"
+            FolderPath           = "DUB:\Application\Java"
+            DPGroupName          = "AllDP"
+            EstimatedRuntimeMins = 10
+        }
+        SCCM-NewApp @NewAppParams
+
+        # Distribute and deploy the application
+        Start-CMContentDistribution -ApplicationName "Java $FileVer" -DistributionPointName 'drscmsrv2.dealers.aib.pri' -DistributionPointGroupName 'AllDP'
+        DeployToGroup -Apps "Java $FileVer" -Collection "Test_MB" -Now
+        Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "Test_MB"
+    } else {
+        Write-Output "Deployment type for Java $FileVer already exists."
+    }
+}
 function Pack-Java {
  $Location = "\\drscmsrv2\e$\SoftwarePackages\Java\"
  $Path = (gci $Location "jre*.exe" -Recurse | sort LastAccessTime | select -Last 1).fullname
