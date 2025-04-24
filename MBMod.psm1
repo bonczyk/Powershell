@@ -6,8 +6,8 @@
  [Management.Automation.WildcardPattern]::Escape('test[1].txt (foo)')
  [regex]::Escape("test[1].txt (foo)")
  Run-Remote $pc "powershell -command `"Start-Transcript c:\temp\log_appx.txt; Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Edge*\`" }; Stop-Transcript`""
- 
- adinfo
+#> 
+<# adinfo
  $l = Ping-DealersPCs
 
  $out = $l | % {  [PSCustomObject]@{ PC = $_; folder=(Test-path "\\$_\c$\Program Files\DRS" ) } }
@@ -66,7 +66,6 @@ Has the back-out plan in place been tested?
 Yes, the back-out plan includes reverting to the previous stable version of Microsoft Edge and ensuring all user data and settings are preserved.
 "@
 }
-
 
 function CRQ-CU {
 
@@ -129,51 +128,75 @@ function Pack-CU {
   DeployToGroup
 }
 
-function Pack-Java {
-# Variables
-$Location = "\\drscmsrv2\e$\SoftwarePackages\Java\"
-$Path = (gci $Location "jre*.exe" -Recurse | sort LastAccessTime | select -Last 1).fullname
-$Path
-$SCCM = '\\drscmsrv2\e$\SoftwarePackages\Java'
-$SCCMSiteCode = 'DUB'
-$mountPath = '\\drscmsrv2\e$'
-
-$file = gci $path
-$info = (gci $path).VersionInfo
-
-# map SCCM server to move files
-if ((Get-SmbMapping).RemotePath -notcontains $mountPath) {
-  $freeletter = ls function:[d-z]: -n | ?{ !(test-path $_ -ErrorAction SilentlyContinue) } | select -Last 1 
-  $freeletter
-  $p = Read-Host "Password" 
-  $map = New-SmbMapping -LocalPath $freeletter -RemotePath \\drscmsrv1\e$ -UserName adm_58691 -Password $p
-}  
-
-# Move the downloaded file to the appropriate location
-$FileVer = $info.FileVersion
-$FileName = $file.Name
-$destinationfolder = "$SCCM\$FileVer"
-Write-Output "Downloaded version: $FileVer"
-Write-Output "Destination folder is $destinationfolder"
-
-$JavaVer3d = (($FileVer -split '\.')[2]).Substring(0,3)
-# $javaGUID = "{77924AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"
-$javaGUID2 = "{71024AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"
-
-IF (!(test-path $destinationfolder)) {
-    Write-Output "$destinationfolder does not exist"
-    [System.IO.Directory]::CreateDirectory($destinationfolder)
-    Write-Output "Creating $destinationfolder"
-    [System.IO.File]::Move($Path,"$destinationfolder\$Filename")
-    Write-Output "Moving $Path to $destinationfolder"
-
-    $SavedPath = $(pwd)
-    # IF (!(Get-WindowsFeature RSAT-AD-PowerShell).installed) {Add-WindowsFeature RSAT-AD-PowerShell}
-    # IF (!(Get-Module ConfigurationManager)) {Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)}
+function SCCM-NewApp {
+param (
+    [Parameter(Mandatory)][string]$AppName,
+    [Parameter(Mandatory)][string]$Description,
+    [Parameter(Mandatory)][string]$Publisher,
+    [Parameter(Mandatory)][string]$SoftwareVersion,
+    [Parameter(Mandatory)][string]$Icon,
+    [Parameter(Mandatory)][string]$ContentLocation,
+    [Parameter(Mandatory)][string]$InstallCommand,
+    [string]$DTName = "", 
+    [string]$FolderPath = "",
+    [string]$DPName = "",
+    [string]$DPGroupName = "AllDP",
+    [int]$EstimatedRuntimeMins = 10,
+    [PSCustomObject]$DetectionClause
+)
     Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
     IF ($(pwd).path -ne "$SCCMSiteCode`:\") {Set-Location "$SCCMSiteCode`:"}
+    $newApp = @{ Name = $AppName; Description = $Description; Publisher = $Publisher; SoftwareVersion = $SoftwareVersion; IconLocationFile = $Icon }
+    $newApp | ft
+    $app = Get-CMApplication -Fast -Name $AppName
+    if (!($app)) { $app = New-CMApplication @newApp }
+    $app | Select LocalizedDisplayName, LocalizedDescription
+    $addDT  = @{
+        ApplicationName        = $AppName
+        DeploymentTypeName     = $DTName
+        InstallCommand         = $InstallCommand
+        ContentLocation        = $ContentLocation
+        InstallationBehaviorType = 'InstallForSystem'
+        EstimatedRuntimeMins   = $EstimatedRuntimeMins
+        MaximumRuntimeMins     = 15
+        LogonRequirementType   = 'WhetherOrNotUserLoggedOn'
+        ScriptLanguage         = 'PowerShell'
+        ScriptText             = ''
+        Comment                = "$(get-date) - $AppName"
+    }
+    $addDT | ft 
+    if ($DetectionClause) { Add-CMScriptDeploymentType @addDT -AddDetectionClause $DetectionClause | Select LocalizedDisplayName, LocalizedDescription }
+     else { 'ScriptLanguage','ScriptText' | %{$addDT.Remove($_)}; Add-CMMsiDeploymentType @addDT | Select LocalizedDescription, LocalizedDisplayName   }    
+    if ($FolderPath) { Move-CMObject -FolderPath $FolderPath -InputObject $app }
+    if ($DPName) { Start-CMContentDistribution -InputObject $app -DistributionPointName $DPName -ErrorAction SilentlyContinue }
+    elseif ($DPGroupName) { Start-CMContentDistribution -InputObject $app -DistributionPointGroupName $DPGroupName -ErrorAction SilentlyContinue }
+}
 
-    IF (!(Get-CMDeploymentType -ApplicationName "Java" -DeploymentTypeName "Java $FileVer")) {
+function Pack-Java {
+ $Location = "\\drscmsrv2\e$\SoftwarePackages\Java\"
+ $Path = (gci $Location "jre*.exe" -Recurse | sort LastAccessTime | select -Last 1).fullname
+ $Path
+ $SCCM = '\\drscmsrv2\e$\SoftwarePackages\Java'
+ $file = gci $path
+ $info = (gci $path).VersionInfo
+ hl "Downloaded version: $EdgeVersion" $EdgeVersion 
+ hl "Destination folder: $destinationfolder" "$destinationfolder" 
+ SCCM-MapDrive
+
+ $FileVer = $info.FileVersion
+ $FileName = $file.Name
+ $destinationfolder = "$SCCM\$FileVer"
+ Write-Output "Downloaded version: $FileVer"
+ Write-Output "Destination folder is $destinationfolder"
+
+ $JavaVer3d = (($FileVer -split '\.')[2]).Substring(0,3)
+ # $javaGUID = "{77924AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"
+ $javaGUID2 = "{71024AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"
+ IF (!(test-path $destinationfolder)) { hl "Creating $destinationfolder" "$destinationfolder"
+    [System.IO.Directory]::CreateDirectory($destinationfolder); Write-Output "Moving $Path to $destinationfolder"  
+    [System.IO.File]::Move($Path,"$destinationfolder\$Filename")  }
+ SCCM-LoadModule
+ IF (!(Get-CMDeploymentType -ApplicationName "Java" -DeploymentTypeName "Java $FileVer")) {
         Write-Output "No deployment type exists for Java - $FileVer"
 
     $newApp = @{ Name        = "Java $FileVer"
@@ -221,124 +244,75 @@ IF (!(test-path $destinationfolder)) {
     $NewDep | ft
     New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
     Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "Test_MB"
-    }
- Set-Location $SavedPath
- } ELSE { Write-Output "$destinationfolder already exists" }    
-}
-
-function Pack-Edge {
-#  Create SCCM EDGE application and deployment
-
-#Variables
-$Path = "\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE\MicrosoftEdgeEnterpriseX64.msi"
-$SCCM = '\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE'
-$SCCMSiteCode = 'DUB'
-$mountPath = '\\drscmsrv2\e$'
-
-# Get file metadata
-function Get-FileDetails($path) {
-  $objShell = New-Object -ComObject Shell.Application 
-  $objFolder = $objShell.namespace((Get-Item $path).DirectoryName) 
-  foreach ($File in $objFolder.items()) {
-    If ($file.path -eq $path) {
-        $FileMetaData = New-Object PSOBJECT 
-        for ($a=0 ; $a -le 266; $a++) {  
-         if($objFolder.getDetailsOf($File, $a)) { 
-             $hash += @{$($objFolder.getDetailsOf($objFolder.items, $a)) = $($objFolder.getDetailsOf($File, $a)) }
-            $FileMetaData | Add-Member $hash 
-            $hash.clear()  
-           } 
-        }
-    }
-  }
-return $FileMetaData
-}
-
-$Meta = Get-FileDetails $Path
-
-# map SCCM server to move files
-if ((Get-SmbMapping).RemotePath -notcontains $mountPath) {
-  $freeletter = ls function:[d-z]: -n | ?{ !(test-path $_ -ErrorAction SilentlyContinue) } | select -Last 1 
-  $freeletter
-  $p = Read-Host "Password" 
-  $map = New-SmbMapping -LocalPath $freeletter -RemotePath \\drscmsrv2\e$ -UserName adm_58691 -Password $p
-}  
-
-# Move the downloaded file to the appropriate location
-$EDGEVersion = $Meta.Comments.split(' ')[0]
-Write-Output "Downloaded version: $EdgeVersion"
-$Filename = $((get-item $Path).name)
-$destinationfolder = "$SCCM\$EdgeVersion"
-Write-Output "Destination folder is $destinationfolder"
-
-IF (!(test-path $destinationfolder)) {
-    Write-Output "$destinationfolder does not exist"
-    [System.IO.Directory]::CreateDirectory($destinationfolder)
-    Write-Output "Creating $destinationfolder"
-    [System.IO.File]::Move($Path,"$destinationfolder\$Filename")
-    Write-Output "Moving $Path to $destinationfolder"
-
-    $SavedPath = $(pwd)
-    # IF (!(Get-WindowsFeature RSAT-AD-PowerShell).installed) {Add-WindowsFeature RSAT-AD-PowerShell}
-    # IF (!(Get-Module ConfigurationManager)) {Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)}
-    Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
-    IF ($(pwd).path -ne "$SCCMSiteCode`:\") {Set-Location "$SCCMSiteCode`:"}
-
-    IF (!(Get-CMDeploymentType -ApplicationName "Ms Edge" -DeploymentTypeName "Microsoft Edge - $EdgeVersion")) {
-        Write-Output "No deployment type exists for Microsoft Edge - $EdgeVersion"
-
-    $newApp = @{ Name        = "Microsoft Edge $EdgeVersion"
-                 Description = "Microsoft Edge Installer"
-                 Publisher = 'Microsoft'
-                 SoftwareVersion = $EdgeVersion
-                 IconLocationFile = '\\drscmsrv2\e$\SoftwarePackages\_ico\edge_browser.png'
-    }
-    New-CMApplication @newApp | Select LocalizedDescription, LocalizedDisplayName
-
-    $addMsi = @{ ApplicationName = "Microsoft Edge $EdgeVersion"
-                 ContentLocation = "$destinationfolder\$filename"
-                 Comment = "$(get-date)"
-                 DeploymentTypeName = "DT_Edge_$EdgeVersion"
-                 InstallationBehaviorType = 'InstallForSystem' 
-                 InstallCommand = "msiexec /i $filename /qn"
-                 MaximumRuntimeMins = 15
-                 EstimatedRuntimeMins = 5 
-    
-    }
-    Add-CMMsiDeploymentType @addMsi | Select LocalizedDescription, LocalizedDisplayName
-
-    $a = Get-CMApplication -Name "Microsoft Edge $EdgeVersion"
-    Move-CMObject -FolderPath "DUB:\Application\Microsoft Edge" -InputObject $a
-
-    Start-CMContentDistribution -ApplicationName "Microsoft Edge $EdgeVersion" -DistributionPointName 'drscmsrv2.dealers.aib.pri' -DistributionPointGroupName 'AllDP'
-
-   $NewDep = @{ ApplicationName = "Microsoft Edge $EdgeVersion"
-                CollectionName = "Test_MB"
-                AvailableDateTime = get-date -Hour 20 -Minute 3
-                DeadlineDateTime = get-date
-                DeployAction = "Install"                
-                DeployPurpose = "Required"
-                UserNotification = "DisplaySoftwareCenterOnly"
-                SendWakeupPacket = $true  
-                PersistOnWriteFilterDevice = $false
-    }
-    New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
-    $NewDep.CollectionName = "SCCM Pre-Test Group"
-    New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
-    $NewDep.CollectionName = "SCCM Test Group"
-    New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
-
-    Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "Test_MB"
-    Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "SCCM Pre-Test Group"
-    Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "SCCM Test Group"
-
-
-    }
-
-    Set-Location $SavedPath
- } ELSE { Write-Output "$destinationfolder already exists"
+    } ELSE { Write-Output "$destinationfolder already exists" }
+  Set-Location $SavedPath
 }    
+
+function SCCM-MapDrive {
+param ($RemotePath = '\\drscmsrv2\e$', $UserName = 'adm_58691', $freeletter =( ls function:[d-z]: -n | ?{ !(Test-Path $_ -EA SilentlyContinue) } | select -Last 1) )
+    if ((Get-SmbMapping).RemotePath -notcontains $RemotePath) {
+        if ($freeletter) {
+            $p = Read-Host "Enter Password" -AsSecureString
+            New-SmbMapping -LocalPath $freeletter -RemotePath $RemotePath -UserName $UserName -Password ([Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p)))
+        } else { Write-Error "No available drive letters." }
+    } else { Write-Host "Path already mapped." }
 }
+
+function SCCM-LoadModule($SCCMSiteCode='DUB') {
+  Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
+  IF ($(pwd).path -ne "$SCCMSiteCode`:\") {Set-Location "$SCCMSiteCode`:"}
+}
+
+function Pack-Edge($Path="\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE\",$SCCM='\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE') {
+  cd C:
+  $path = (gci -Path $Path -Filter *.msi -Recurse | sort LastWriteTime | select -Last 1).FullName
+  $Meta = Get-FileDetails $Path   
+  $EDGEVersion = $Meta.Comments.split(' ')[0]; 
+  $Filename = (get-item $Path).name
+  $destinationfolder = "$SCCM\$EdgeVersion";
+  hl "Downloaded version: $EdgeVersion" $EdgeVersion 
+  hl "Destination folder: $destinationfolder" "$destinationfolder" 
+  SCCM-MapDrive
+  IF (!(test-path $destinationfolder)) { hl "Creating $destinationfolder" "$destinationfolder"
+    [System.IO.Directory]::CreateDirectory($destinationfolder); Write-Output "Moving $Path to $destinationfolder"  
+    [System.IO.File]::Move($Path,"$destinationfolder\$Filename")  }
+  $SavedPath = $(pwd)
+  SCCM-LoadModule
+  IF ((Get-CMDeploymentType -ApplicationName "Microsoft Edge $EdgeVersion" -DeploymentTypeName "DT_Edge_$EdgeVersion")) { hl "Already exist Microsoft Edge - $EdgeVersion" "Microsoft Edge - $EdgeVersion";break }
+  $NewApp = @{
+    AppName              = "Microsoft Edge $EdgeVersion"
+    Description          = "Microsoft Edge Installer"
+    Publisher            = "Microsoft"
+    SoftwareVersion      = $EdgeVersion
+    Icon                 = "\\drscmsrv2\e$\SoftwarePackages\_ico\edge_browser.png"
+    ContentLocation      = "$destinationfolder\$filename"
+    InstallCommand       = "msiexec /i $filename /qn"
+    DTName               = "DT_Edge_$EdgeVersion"
+    FolderPath           = "DUB:\Application\Microsoft Edge"
+    DPGroupName          = "AllDP"
+    EstimatedRuntimeMins = 10 
+  }
+  SCCM-NewApp @NewApp
+<#
+  SCCM-NewApp `
+    -AppName     "Microsoft Edge $EdgeVersion" `
+    -Description "Microsoft Edge Installer" `
+    -Publisher   "Microsoft" `
+    -SoftwareVersion $EdgeVersion `
+    -Icon "\\drscmsrv2\e$\SoftwarePackages\_ico\edge_browser.png" `
+    -ContentLocation "$destinationfolder\$filename" `
+    -InstallCommand "msiexec /i $filename /qn" `
+    -DTName "DT_Edge_$EdgeVersion" `
+    -FolderPath "DUB:\Application\Microsoft Edge" `
+    -DPGroupName "AllDP" `
+    -EstimatedRuntimeMins 10
+#>
+  $grp = "Test_MB","SCCM Pre-Test Group","SCCM Test Group"
+  $grp[0..1] | % { DeployToGroup -Apps "Microsoft Edge $EdgeVersion" -Collection $_ -Now -WhatIf }
+  DeployToGroup -Apps "Microsoft Edge $EdgeVersion" -Collection 'SCCM Test Group' 
+  $grp | % {  Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName $_ }
+  cd $SavedPath 
+} 
 
 function Pack-Calypso([switch]$hex) {
  $fpath = '\\drscmsrv2\e$\SoftwarePackages\Calypso\'
@@ -388,6 +362,39 @@ distribute
 deploy to test calypso pc
 same for TRxx_hex and add jstack2.bat to bin and start jstack2.bat to Navigator(Pre)Prod.bat
 #>
+}
+
+function DeployToGroup {   
+param ( [string]$Apps = "$(Get-Date -f yyyy-MM)-*",
+        [Parameter(Mandatory=$False)][ValidateSet('SCCM Pre-Test Group', 'SCCM Test Group', 'SCCM Group 1', 'SCCM Group 2', 'SCCM Group 3', 'SCCM Group 4','Test_MB')]
+        [string]$Collection = 'SCCM Pre-Test Group',
+        [datetime]$StartTime = (Get-Date -Hour 22 -Minute 03),
+        [switch]$WhatIf, [switch]$Now   ) 
+        
+if ($now) { $StartTime=Get-Date}
+Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); cd "DUB:\"
+$appsToDeploy = Get-CMApplication -Name $Apps | select -ExpandProperty LocalizedDisplayName 
+if (-not $AppsToDeploy) { Write-Host "No applications found matching the pattern '$Apps'" -ForegroundColor Yellow; return } else { $appsToDeploy }
+hl "Deploying applications to collection: $Collection" "$Collection" -nonewline 1; hl ", start time: $StartTime , increment 15 min" "$StartTime"
+if ($WhatIf) { break }
+
+foreach ($app in $appsToDeploy){
+  $NewDep = @{  ApplicationName = $app
+                CollectionName = $Collection
+                AvailableDateTime = $StartTime
+                #DeadlineDateTime = $Time
+                DeployAction = "Install"                
+                DeployPurpose = "Required"
+                UserNotification = "DisplaySoftwareCenterOnly"
+                SendWakeupPacket = $true
+                AllowRepairApp = $true  
+                PersistOnWriteFilterDevice = $false
+  } 
+  $NewDep | ft
+  $Result = New-CMApplicationDeployment @NewDep | Select-Object ApplicationName, CollectionName, StartTime
+  Write-Host "Deployed: $($Result.ApplicationName) to $($Result.CollectionName) at $($Result.StartTime)" -ForegroundColor Cyan
+  $StartTime = $StartTime.AddMinutes(15)
+ }; c:
 }
 
 function Get-UDVariable {
@@ -706,12 +713,19 @@ function Test-Modules {
   $ModUNC.keys | % { If (-not(Get-module $_)) { Import-Module $($ModUNC[$_]) -Global -WA SilentlyContinue } }
 }
 
-function ImportMe {
-  #iex ${using:function:ImportMe}.Ast.Extent.Text;ImportMe
-  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -WA SilentlyContinue  
+function Me-Import {
+  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -WA SilentlyContinue -Force -Global
   #Import-Module "$ScriptPath\modules\MBMod\0.3\MBMod.psm1" -Force -Global -WarningAction SilentlyContinue
   Init
 }
+
+function ImportMe {
+  #iex ${using:function:ImportMe}.Ast.Extent.Text;ImportMe
+  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -WA SilentlyContinue -Force
+  #Import-Module "$ScriptPath\modules\MBMod\0.3\MBMod.psm1" -Force -Global -WarningAction SilentlyContinue
+  Init
+}
+
 
 function Get-CallingFileName {
   $cStack = @(Get-PSCallStack | ? { $_.ScriptName -and $_.ScriptName -notlike "*MBMod.psm1*" } )
@@ -1154,33 +1168,6 @@ function Move-toCM($path='C:\Temp\updates\') {
  }
 }
 
-function DeployToGroup($Apps="$(Get-Date –f yyyy-MM)-*",
-    [Parameter(Mandatory=$False)][ValidateSet('SCCM Pre-Test Group','SCCM Test Group','SCCM Group 1','SCCM Group 2','SCCM Group 3','SCCM Group 4')]
-    [string]$Collection='SCCM Pre-Test Group', $Time=(get-date -Hour 22 -Minute 03)) {
-Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); cd "DUB:\"
- $appsToDeploy = Get-CMApplication -Name $Apps | select -ExpandProperty LocalizedDisplayName 
- #$appsToDeploy =  $appsToDeploy | ? { $_ -like "*cu*"}
- $appsToDeploy
- "Apps will be deployed to $($Collection) - start time $Time , increment 15 min"
- pause
- foreach ($app in $appsToDeploy){
-  $NewDep = @{  ApplicationName = $app
-                CollectionName = $Collection
-                AvailableDateTime = $Time
-                #DeadlineDateTime = $Time
-                DeployAction = "Install"                
-                DeployPurpose = "Required"
-                UserNotification = "DisplaySoftwareCenterOnly"
-                SendWakeupPacket = $true
-                AllowRepairApp = $true  
-                PersistOnWriteFilterDevice = $false
-  } 
- $Time = $Time.AddMinutes(15)
- New-CMApplicationDeployment @NewDep | select ApplicationName,CollectionName,StartTime
- }
- c:
-}
-
 function SHowFaultyDeployment {
  Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"; cd DUB:
  $appsToDeploy = Get-CMApplication -Fast -Name "2023-10-*"   # | select -ExpandProperty LocalizedDisplayName 
@@ -1499,18 +1486,21 @@ function hist ($o) {
   #save to file
 }
 
-function hl ($text, $word, $fc, $bc) {
+function hl ($text, $word, $fc=14, $bc, $nonewline) {
   $text = ($text | Out-String).Trim()
-  $s = $text -split $word
-  if (!$fc) { $fc = 14 }
+  $s = $text -split ([regex]::Escape($word))
   Write-Host $s[0] -NoNewline
   for ($i = 1; $i -lt $s.count; $i++) {  
     $ex = "Write-Host $word -NoNewline -ForegroundColor $fc "
-    if ($bc) { $ex += "-BackgroundColor Yellow" } 
+    if ($bc) { $ex += "-BackgroundColor $bc" } 
     iex $ex
     Write-Host $s[$i] -NoNewline
   }
+  if (!$nonewline) { Write-Host }
 }
+
+ [Management.Automation.WildcardPattern]::Escape('test[1].txt (foo)')
+ [regex]::Escape("test[1].txt (foo)")
 
 Function WinTitle($Title) {
   $host.ui.RawUI.WindowTitle = $Title
