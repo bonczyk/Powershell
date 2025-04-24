@@ -16,6 +16,12 @@
  $list = $l | % { $path ="\\$_\c$\Temp\Logs\11023_*.txt";  if (Test-Path $path) { [PSCustomObject]@{ PC = $_; folder=(gci $path ) } } }
  $list.folder | % { PraseNetUse (gc $_) } | select -Unique Remote
  
+$MemoryStream = [System.IO.MemoryStream]::new()
+$Compressor = [System.IO.Compression.DeflateStream]::new($MemoryStream,[System.IO.Compression.CompressionMode]::Compress)
+$CompressionWriter = [System.IO.StreamWriter]::new($Compressor)
+$CompressionWriter.Write($mystring)
+$CompressedByteArray = $MemoryStream.ToArray()
+
 #>
 
 function CRQ-Edge {
