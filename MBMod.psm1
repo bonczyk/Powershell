@@ -78,17 +78,11 @@ function SCCM-NewApp {
 }
 
 function Pack-Java {
-  param (
-    [string]$Location = "\\drscmsrv2\e$\SoftwarePackages\Java\",
-    [string]$SCCM = "\\drscmsrv2\e$\SoftwarePackages\Java"
-  )
+  param ( [string]$Location = "\\drscmsrv2\e$\SoftwarePackages\Java\", [string]$SCCM = "\\drscmsrv2\e$\SoftwarePackages\Java" )
     
   # Locate the latest Java installer
   $Path = (Get-ChildItem -Path $Location -Filter "jre*.exe" -Recurse | Sort-Object LastAccessTime | Select-Object -Last 1).FullName
-  if (-not $Path) {
-    Write-Error "No Java installer found in $Location"
-    return
-  }
+  if (-not $Path) { Write-Error "No Java installer found in $Location"; return }
 
   $File = Get-Item $Path
   $Info = $File.VersionInfo
@@ -97,7 +91,7 @@ function Pack-Java {
 
   # Log details
   Write-Output "Downloaded version: $FileVer"
-  Write-Output "Destination folder is $DestinationFolder"
+  Write-Output "Destination folder: $DestinationFolder"
 
   # Ensure the destination folder exists
   if (-not (Test-Path $DestinationFolder)) {
@@ -155,7 +149,7 @@ function Pack-Java {
   $FileName = $file.Name
   $destinationfolder = "$SCCM\$FileVer"
   Write-Output "Downloaded version: $FileVer"
-  Write-Output "Destination folder is $destinationfolder"
+  Write-Output "Destination folder: $destinationfolder"
 
   $JavaVer3d = (($FileVer -split '\.')[2]).Substring(0, 3)
   # $javaGUID = "{77924AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"
