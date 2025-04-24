@@ -1,4 +1,4 @@
-<#
+﻿<#
  Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"; cd DUB:
  Import-Module "\\drsitsrv1\DRSsupport$\Projects\2022\Test-BCS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
