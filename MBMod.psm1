@@ -1,4 +1,4 @@
-﻿<#
+<#
  Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"; cd DUB:
  Import-Module "\\drsitsrv1\DRSsupport$\Projects\2022\Test-BCS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
@@ -31,50 +31,6 @@ function Pack-CU {
   New-MSPapp
   New-MSUapp
   DeployToGroup
-}
-
-function SCCM-NewApp {
-  param (
-    [Parameter(Mandatory)][string]$AppName,
-    [Parameter(Mandatory)][string]$Description,
-    [Parameter(Mandatory)][string]$Publisher,
-    [Parameter(Mandatory)][string]$SoftwareVersion,
-    [Parameter(Mandatory)][string]$Icon,
-    [Parameter(Mandatory)][string]$ContentLocation,
-    [Parameter(Mandatory)][string]$InstallCommand,
-    [string]$DTName = "", 
-    [string]$FolderPath = "",
-    [string]$DPName = "",
-    [string]$DPGroupName = "AllDP",
-    [int]$EstimatedRuntimeMins = 10,
-    [PSCustomObject]$DetectionClause
-  )
-  Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
-  IF ($(pwd).path -ne "$SCCMSiteCode`:\") { Set-Location "$SCCMSiteCode`:" }
-  $newApp = @{ Name = $AppName; Description = $Description; Publisher = $Publisher; SoftwareVersion = $SoftwareVersion; IconLocationFile = $Icon }
-  $newApp | ft
-  $app = Get-CMApplication -Fast -Name $AppName
-  if (!($app)) { $app = New-CMApplication @newApp }
-  $app | Select LocalizedDisplayName, LocalizedDescription
-  $addDT = @{
-    ApplicationName          = $AppName
-    DeploymentTypeName       = $DTName
-    InstallCommand           = $InstallCommand
-    ContentLocation          = $ContentLocation
-    InstallationBehaviorType = 'InstallForSystem'
-    EstimatedRuntimeMins     = $EstimatedRuntimeMins
-    MaximumRuntimeMins       = 15
-    LogonRequirementType     = 'WhetherOrNotUserLoggedOn'
-    ScriptLanguage           = 'PowerShell'
-    ScriptText               = ''
-    Comment                  = "$(get-date) - $AppName"
-  }
-  $addDT | ft 
-  if ($DetectionClause) { Add-CMScriptDeploymentType @addDT -AddDetectionClause $DetectionClause | Select LocalizedDisplayName, LocalizedDescription }
-  else { 'ScriptLanguage', 'ScriptText' | % { $addDT.Remove($_) }; Add-CMMsiDeploymentType @addDT | Select LocalizedDescription, LocalizedDisplayName }    
-  if ($FolderPath) { Move-CMObject -FolderPath $FolderPath -InputObject $app }
-  if ($DPName) { Start-CMContentDistribution -InputObject $app -DistributionPointName $DPName -ErrorAction SilentlyContinue }
-  elseif ($DPGroupName) { Start-CMContentDistribution -InputObject $app -DistributionPointGroupName $DPGroupName -ErrorAction SilentlyContinue }
 }
 
 function Pack-Java {
@@ -211,24 +167,7 @@ function Pack-Java {
   }
   ELSE { Write-Output "$destinationfolder already exists" }
   Set-Location $SavedPath
-}    
-
-function SCCM-MapDrive {
-  param ($RemotePath = '\\drscmsrv2\e$', $UserName = 'adm_58691', $freeletter = ( ls function:[d-z]: -n | ? { !(Test-Path $_ -EA SilentlyContinue) } | select -Last 1) )
-  if ((Get-SmbMapping).RemotePath -notcontains $RemotePath) {
-    if ($freeletter) {
-      $p = Read-Host "Enter Password" -AsSecureString
-      New-SmbMapping -LocalPath $freeletter -RemotePath $RemotePath -UserName $UserName -Password ([Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p)))
-    }
-    else { Write-Error "No available drive letters." }
-  }
-  else { Write-Host "Path already mapped." }
-}
-
-function SCCM-LoadModule($SCCMSiteCode = 'DUB') {
-  Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
-  IF ($(pwd).path -ne "$SCCMSiteCode`:\") { Set-Location "$SCCMSiteCode`:" }
-}
+}   
 
 function Pack-Edge($Path = "\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE\", $SCCM = '\\drscmsrv2\e$\SoftwarePackages\Microsoft EDGE') {
   cd C:
@@ -332,6 +271,67 @@ distribute
 deploy to test calypso pc
 same for TRxx_hex and add jstack2.bat to bin and start jstack2.bat to Navigator(Pre)Prod.bat
 #>
+} 
+
+function SCCM-NewApp {
+  param (
+    [Parameter(Mandatory)][string]$AppName,
+    [Parameter(Mandatory)][string]$Description,
+    [Parameter(Mandatory)][string]$Publisher,
+    [Parameter(Mandatory)][string]$SoftwareVersion,
+    [Parameter(Mandatory)][string]$Icon,
+    [Parameter(Mandatory)][string]$ContentLocation,
+    [Parameter(Mandatory)][string]$InstallCommand,
+    [string]$DTName = "", 
+    [string]$FolderPath = "",
+    [string]$DPName = "",
+    [string]$DPGroupName = "AllDP",
+    [int]$EstimatedRuntimeMins = 10,
+    [PSCustomObject]$DetectionClause
+  )
+  Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
+  IF ($(pwd).path -ne "$SCCMSiteCode`:\") { Set-Location "$SCCMSiteCode`:" }
+  $newApp = @{ Name = $AppName; Description = $Description; Publisher = $Publisher; SoftwareVersion = $SoftwareVersion; IconLocationFile = $Icon }
+  $newApp | ft
+  $app = Get-CMApplication -Fast -Name $AppName
+  if (!($app)) { $app = New-CMApplication @newApp }
+  $app | Select LocalizedDisplayName, LocalizedDescription
+  $addDT = @{
+    ApplicationName          = $AppName
+    DeploymentTypeName       = $DTName
+    InstallCommand           = $InstallCommand
+    ContentLocation          = $ContentLocation
+    InstallationBehaviorType = 'InstallForSystem'
+    EstimatedRuntimeMins     = $EstimatedRuntimeMins
+    MaximumRuntimeMins       = 15
+    LogonRequirementType     = 'WhetherOrNotUserLoggedOn'
+    ScriptLanguage           = 'PowerShell'
+    ScriptText               = ''
+    Comment                  = "$(get-date) - $AppName"
+  }
+  $addDT | ft 
+  if ($DetectionClause) { Add-CMScriptDeploymentType @addDT -AddDetectionClause $DetectionClause | Select LocalizedDisplayName, LocalizedDescription }
+  else { 'ScriptLanguage', 'ScriptText' | % { $addDT.Remove($_) }; Add-CMMsiDeploymentType @addDT | Select LocalizedDescription, LocalizedDisplayName }    
+  if ($FolderPath) { Move-CMObject -FolderPath $FolderPath -InputObject $app }
+  if ($DPName) { Start-CMContentDistribution -InputObject $app -DistributionPointName $DPName -ErrorAction SilentlyContinue }
+  elseif ($DPGroupName) { Start-CMContentDistribution -InputObject $app -DistributionPointGroupName $DPGroupName -ErrorAction SilentlyContinue }
+}
+
+function SCCM-MapDrive {
+  param ($RemotePath = '\\drscmsrv2\e$', $UserName = 'adm_58691', $freeletter = ( ls function:[d-z]: -n | ? { !(Test-Path $_ -EA SilentlyContinue) } | select -Last 1) )
+  if ((Get-SmbMapping).RemotePath -notcontains $RemotePath) {
+    if ($freeletter) {
+      $p = Read-Host "Enter Password" -AsSecureString
+      New-SmbMapping -LocalPath $freeletter -RemotePath $RemotePath -UserName $UserName -Password ([Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($p)))
+    }
+    else { Write-Error "No available drive letters." }
+  }
+  else { Write-Host "Path already mapped." }
+}
+
+function SCCM-LoadModule($SCCMSiteCode = 'DUB') {
+  Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1)
+  IF ($(pwd).path -ne "$SCCMSiteCode`:\") { Set-Location "$SCCMSiteCode`:" }
 }
 
 function DeployToGroup {   
