@@ -26,7 +26,8 @@ $CompressedByteArray = $MemoryStream.ToArray()
 [regex]::Escape("test[1].txt (foo)")
 #>
 
-function hl ($text, $word, $fc = 14, $bc, $nonewline) {
+function hl {
+  param ( [string]$text, [string]$word, [System.ConsoleColor]$fc = 14, [System.ConsoleColor]$bc, [switch]$nonewline )
   $text = ($text | Out-String).Trim()
   $s = $text -split ([regex]::Escape($word))
   Write-Host $s[0] -NoNewline
@@ -38,8 +39,6 @@ function hl ($text, $word, $fc = 14, $bc, $nonewline) {
   }
   if (!$nonewline) { Write-Host }
 }
-
-
 
 function Copy-PreProd($To,$From='40534') {
 $u1 = (get-adi($from)).name
@@ -1680,6 +1679,7 @@ function hist ($o) {
   $global:hist = $global:hist | Select-Object -first 20
   #save to file
 }
+
 
 Function WinTitle($Title) {
   $host.ui.RawUI.WindowTitle = $Title
