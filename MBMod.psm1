@@ -1,4 +1,4 @@
-﻿<#
+<#
  Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"; cd DUB:
  Import-Module "\\drsitsrv1\DRSsupport$\Projects\2022\Test-BCS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
@@ -23,6 +23,55 @@ $CompressionWriter.Write($mystring)
 $CompressedByteArray = $MemoryStream.ToArray()
 
 #>
+
+function Copy-PreProd($To,$From='40534') {
+$u1 = (get-adi($from)).name
+$u2 = (get-adi($to)).name
+$p1 = (get-adi($u1)).Office
+$p2 = (get-adi($u2)).Office
+if (!$p1 -or !$p2) { "Mising computer name";break}
+$d1 = (get-adi($u1)).displayname
+$d2 = (get-adi($u2)).displayname
+
+"$u1 $d1 $p1 -> $u2 $d2 $p2" 
+""
+(Get-Path $p1 $u1 6 '\PreProd') +' -> '+ (Get-Path $p2 $u2 6)
+(Get-Path $p1 $u1 5)            +' -> '+ (Get-Path $p2 $u2 4)
+(Get-Path $p1 $u1 4 '\client')  +' -> '+ (Get-Path $p2 $u2 4)
+(Get-Path $p1 $u1 2 '\NavigatorPreProd.lnk') +' -> '+ (Get-Path $p2 $u2 2)
+pause
+
+CopyWin (Get-Path $p1 $u1 6 '\PreProd') (Get-Path $p2 $u2 6)
+CopyWin (Get-Path $p1 $u1 5) (Get-Path $p2 $u2 4)
+CopyWin (Get-Path $p1 $u1 4 '\client') (Get-Path $p2 $u2 4)
+CopyWin (Get-Path $p1 $u1 2 '\NavigatorPreProd.lnk') (Get-Path $p2 $u2 2)
+
+}
+
+function Get-Path($pc,$user,$no,$leaf) {
+ $p= @("\\$($pc)\c$\Users\$($user)" ,`
+       "\\$($pc)\c$\Users\$($user)\Desktop" ,`
+       "\\$($pc)\c$\Users\Public\Desktop",`
+       "\\$($pc)\C$\Users\$($user)\Calypso",`
+       "\\$($pc)\C$\Users\$($user)\Calypso\calypsouser.properties.Prod",
+       "\\$($pc)\C$\Program Files\CalypsoThickClient",`
+       "\\$($pc)\C$\Program Files (x86)\Shutdown",`    
+       "\\$($pc)\C$\Users\$($user)\AppData\Local\Microsoft\Edge\User Data\Default\Bookmarks",`
+       "\\$($pc)\C$\Users\$($user)\AppData\Local\Microsoft\Outlook\*.ost" )
+ if ($no) { if ($leaf) { $p[$no-1]+$leaf } else { $p[$no-1] } } else { $p }
+}
+
+
+function Get-Adi($id){
+  if (-not (Test-Path variable:ADu)) { ADinfo }
+  $ADu | Where-Object { $_.Name -like $id -or $_.DisplayName -like $id -or $_.Office -like $id }
+}
+
+function Get-Time($pc,$cred) {
+ if ($cred) { $time = ([WMI]'').ConvertToDateTime((gwmi win32_operatingsystem -computername $pc -Credential $cred).LocalDateTime) }
+  else { $time = ([WMI]'').ConvertToDateTime((gwmi win32_operatingsystem -computername $pc ).LocalDateTime)}
+    [pscustomobject]@{ pc=$pc; time=$time; }
+}
 
 function Pack-CU {
   Save-NewUpdate
@@ -101,7 +150,7 @@ function Pack-Java {
   hl "Downloaded version: $EdgeVersion" $EdgeVersion 
   hl "Destination folder: $destinationfolder" "$destinationfolder" 
   CM-MapDrive
-
+  
 
   $FileVer = $info.FileVersion
   $FileName = $file.Name
@@ -341,7 +390,7 @@ function CM-LoadModule($SCCMSiteCode = 'DUB') {
 
 function CM-Deploy {   
   param ( [string]$Apps = "$(Get-Date -f yyyy-MM)-*",
-    [Parameter(Mandatory = $False)][ValidateSet('SCCM Pre-Test Group', 'SCCM Test Group', 'SCCM Group 1', 'SCCM Group 2', 'SCCM Group 3', 'SCCM Group 4', 'Test_MB')]
+    [Parameter(Mandatory = $False)][ValidateSet('SCCM Pre-Test Group', 'SCCM Test Group', 'SCCM Group 1', 'SCCM Group 2', 'SCCM Group 3', 'SCCM Group 4', 'Test_MB', 'All Clients')]
     [string]$Collection = 'SCCM Pre-Test Group',
     [datetime]$StartTime = (Get-Date -Hour 22 -Minute 03),
     [switch]$WhatIf, [switch]$Now   ) 
@@ -1043,6 +1092,8 @@ ADinfo
 $l = Ping-DealersPCs
 $out = $l |% { $_; $temp=(Get-PhysicalDiskR $_); [PSCustomObject]@{ PC = $_; MediaType=$temp.MediaType; FriendlyName=$temp.FriendlyName; SerialNumber=$temp.SerialNumber; Size=$temp.Size  } }
 Export-Desktop $out 'SSD'
+ Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
+
 #>
 
 function KMS($pc) {
@@ -1078,6 +1129,26 @@ function Get-EdgeDriver($dir = 'C:\Selenium\src') {
   Remove-Item "$dir\$type.zip"
 }
 
+function Save-KB($kb,$path = "C:\Temp\updates") {
+  if (-not (Test-Path $path)) { mkdir $path }
+  Set-Proxy 1;sleep -m 50;  Set-Proxy 1
+  $Last30Days = { $_.LastUpdated -gt (Get-Date).AddDays(-20) }
+  Get-MSCatalogUpdate -Search $kb -ExcludePreview | ? $Last30Days | tee -v u
+  $u | Out-Host
+  pause
+  if ($u) { $u | ForEach-Object { Save-MSCatalogUpdate $_ $path -AcceptMultiFileUpdates -UseBits -ErrorAction SilentlyContinue  } }
+  Set-Proxy 1
+}
+
+
+function Combine-KbScans($path) {
+$files = gci "$path\*.txt" -Exclude Server*
+$files | % { (Get-Content $_ | Out-String).Trim() | Set-Content $_ }
+$files | % { $hn=($_.name -split ' ')[0]; Import-Csv $_ -Header KB,Desc -Delimiter "`t" } | 
+       % { [PSCustomObject]@{ pc = $hn; KB=$_.KB; Desc=$_.Desc} } 
+       #| % { $_.pc + "`t" + $_.kb + "`t" + $_.Desc } 
+}
+
 function Get-DesktopUpdates {
   # Save-MSCatalogUpdate
   Test-Modules
@@ -1092,17 +1163,18 @@ function Get-DesktopUpdates {
 }
 
 function Get-ServerUpdates {
+  #Win 2019 Test - drs2019test1 and drs2019testdfs1 - Win 2016 Test - drs2016test1 - Win 2012 Test - omg-kms-deal1 
   Test-Modules
   Set-Proxy 1
   Start-Sleep -Seconds 1
-  $Last30Days = { $_.LastUpdated -gt (Get-Date).AddDays(-30) }
-  $o = @( Get-MSCatalogUpdate -Search (Get-Date –f yyyy-MM) -AllPages | Where-Object $Last30Days )
-  $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2012 R2" -AllPages | Where-Object $Last30Days 
-  $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2016" -AllPages | Where-Object $Last30Days 
-  $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2019" -AllPages | Where-Object $Last30Days
-  $o += Get-MSCatalogUpdate -Search "Security Monthly Quality Rollup" -AllPages | Where-Object $Last30Days
+  $Last30Days = { $_.LastUpdated -gt (Get-Date).AddDays(-20) }
+  $o = @( Get-MSCatalogUpdate -Search "$(Get-Date –f yyyy-MM)" | Where-Object $Last30Days )
+  $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2012 R2"  | Where-Object $Last30Days 
+  $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2016"  | Where-Object $Last30Days 
+  $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2019"  | Where-Object $Last30Days
+  $o += Get-MSCatalogUpdate -Search "Security Monthly Quality Rollup"  | Where-Object $Last30Days
   #$o += Get-MSCatalogUpdate -Search "SQL" -AllPages  | ? $Last30Days
-  $o += Get-MSCatalogUpdate -Search "Servicing Stack Update for Windows Server*x64" -Strict -SortBy Products -AllPages | Where-Object $Last30Days
+  $o += Get-MSCatalogUpdate -Search "Servicing Stack Update for Windows Server*x64"  -SortBy Products | Where-Object $Last30Days
   $o | Where-Object { $_.Products -in @("Windows Server 2012 R2", "Windows Server 2016", "Windows Server 2019") } | Sort-Object Title -Unique | Sort-Object Products | Tee-Object -Variable global:SrvKB
   Set-Proxy 0
 }
