@@ -22,7 +22,24 @@ $CompressionWriter = [System.IO.StreamWriter]::new($Compressor)
 $CompressionWriter.Write($mystring)
 $CompressedByteArray = $MemoryStream.ToArray()
 
+[Management.Automation.WildcardPattern]::Escape('test[1].txt (foo)')
+[regex]::Escape("test[1].txt (foo)")
 #>
+
+function hl ($text, $word, $fc = 14, $bc, $nonewline) {
+  $text = ($text | Out-String).Trim()
+  $s = $text -split ([regex]::Escape($word))
+  Write-Host $s[0] -NoNewline
+  for ($i = 1; $i -lt $s.count; $i++) {  
+    $ex = "Write-Host $word -NoNewline -ForegroundColor $fc "
+    if ($bc) { $ex += "-BackgroundColor $bc" } 
+    Invoke-Expression $ex
+    Write-Host $s[$i] -NoNewline
+  }
+  if (!$nonewline) { Write-Host }
+}
+
+
 
 function Copy-PreProd($To,$From='40534') {
 $u1 = (get-adi($from)).name
@@ -1663,22 +1680,6 @@ function hist ($o) {
   $global:hist = $global:hist | Select-Object -first 20
   #save to file
 }
-
-function hl ($text, $word, $fc = 14, $bc, $nonewline) {
-  $text = ($text | Out-String).Trim()
-  $s = $text -split ([regex]::Escape($word))
-  Write-Host $s[0] -NoNewline
-  for ($i = 1; $i -lt $s.count; $i++) {  
-    $ex = "Write-Host $word -NoNewline -ForegroundColor $fc "
-    if ($bc) { $ex += "-BackgroundColor $bc" } 
-    Invoke-Expression $ex
-    Write-Host $s[$i] -NoNewline
-  }
-  if (!$nonewline) { Write-Host }
-}
-
-[Management.Automation.WildcardPattern]::Escape('test[1].txt (foo)')
-[regex]::Escape("test[1].txt (foo)")
 
 Function WinTitle($Title) {
   $host.ui.RawUI.WindowTitle = $Title
