@@ -4,7 +4,6 @@
  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
  Import-Module ".\MBMod.psm1" -Force -WarningAction SilentlyContinue
  [Management.Automation.WildcardPattern]::Escape('test[1].txt (foo)')
- [regex]::Escape("test[1].txt (foo)")
  Run-Remote $pc "powershell -command `"Start-Transcript c:\temp\log_appx.txt; Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Edge*\`" }; Stop-Transcript`""
 #> 
 <# adinfo
@@ -26,7 +25,218 @@ $CompressedByteArray = $MemoryStream.ToArray()
 [regex]::Escape("test[1].txt (foo)")
 #>
 
+function Compare-GPO {
+  param ([String]$Gpo1='22H2C-V1 Bank & Country Credit',[String]$Gpo2='24H2C-V1 WIN 11 B&CC')
+  $p1 = Prase-GPO ([xml](Get-GPO -Name $Gpo1 | Get-GPOReport -ReportType Xml))
+  $p2 = Prase-GPO ([xml](Get-GPO -Name $Gpo2 | Get-GPOReport -ReportType Xml))
+
+  $pp = [ordered]@{ Info = 'Name,FilterName,Domain'
+      Computer = 'Name,State,Category'
+      User= 'Name,State,Category'
+      LinksTo = 'SOMName,SOMPath,Enabled,NoOverride'
+      Account ='Name,SettingBoolean,Type'
+      SecurityOptions = 'Name,SettingNumber,DName'
+      UserRightsAssignment = 'Name,Members'
+      RestrictedGroups = 'Name,MembeOf'
+      SystemnServices = 'Name,StartupMode'
+      Tasks = 'Name,Action,RunAs,LogonType,Task'
+      Registry = 'Name,Key,Value'
+      AuditSetting = 'PolicyTarget,SubcategoryName,SettingValue'
+      DomainProfile = 'Name,Value'
+      PublicProfile = 'Name,Value'
+      PrivateProfile = 'Name,Value'
+      RegistrySetting = 'KeyPath,AdmSetting,Value'
+   }
+  <#
+  $pkeys = $pp.keys
+  $pkeys.GetEnumerator() | % {$pp.$_ = $pp.$_ -split ','}
+  
+  # @($hash.GetEnumerator()) | ?{$_.key -like "*$keyword*"} | %{$hash[$_.value]=$value}
+  $pp.keys | % { $pp.$_ = $pp.$_ -split ',' }
+
+   $Global:bak | select 
+   #>
+  $cmp = $pp.Keys | % { "`n ---===>>> GPO : $_"
+    Compare-Object ($p1.$_) ($p2.$_) -Property ($pp.$_ -split ',') | sort -Property (($pp.$_ -split ',')[0]) | ft -AutoSize }  
+  "$Gpo1      vs      $Gpo2`n" + ($cmp | Out-String -Width 400) 
+}
+
+Function Prase-GPO ($GPOxml) {
+ $temp = $GpoXml.GPO.Computer.ExtensionData.Extension
+ [PSCustomObject]@{
+  Info = $GpoXml.GPO | % { [PSCustomObject]@{ Name=$_.Name; FilterName=$_.FilterName; Domain=$_.Identifier.Domain.InnerText }}
+  LinksTo = $GpoXml.GPO.LinksTo | % { [PSCustomObject]@{ SOMName=$_.SOMName; SOMPath=$_.SOMPath; Enabled=$_.Enabled; NoOverride=$_.NoOverride }}
+  Computer = $temp[7].Policy | % { [PSCustomObject]@{ Name=$_.Name; State=$_.State; <#Explain=$_.Explain -replace "`n";#>  Category=$_.Category; Supported=$_.Supported; } } 
+  User = $GpoXml.GPO.User.ExtensionData.Extension.Policy | % { [PSCustomObject]@{ Name = $_.Name; State=$_.State; <#Explain=$_.Explain -replace "`n";#>  Category=$_.Category; Supported=$_.Supported;  } } 
+  Account = $temp[0].Account | % { [PSCustomObject]@{ Name=$_.Name; SettingBoolean=$_.SettingBoolean; Type=$_.Type } }
+  UserRightsAssignment = $temp[0].UserRightsAssignment | % {  [PSCustomObject]@{ Name = $_.Name;  SID = $_.Member.SID.InnerText -join ','; Members=$_.Member.Name.InnerText -join ',';}}
+  SecurityOptions = $temp[0].SecurityOptions | % {  [PSCustomObject]@{ Name=$_.KeyName; SettingNumber = $_.SettingNumber; DName=$_.Display.Name; DisplayBoolean=$_.Display.DisplayBoolean; Units=$_.Display.Units}} 
+  RestrictedGroups = $temp[0].RestrictedGroups | % {  [PSCustomObject]@{ Name=$_.GroupName.Name.InnerText;  MembeOf=$_.Memberof.Name.InnerText }}
+  SystemnServices = $temp[0].SystemServices | % { [PSCustomObject]@{ Name=$_.Name; StartupMode=$_.StartupMode}}
+  Tasks = $temp[1].ScheduledTasks.TaskV2.Properties | % { [PSCustomObject]@{ Name=$_.Name; action=$_.Action; RunAs=$_.runAs; LogonType=$_.logonType; Task=$_.Task } }
+  Registry = $temp[2].RegistrySettings.Registry.Properties | % { [PSCustomObject]@{ Name = $_.Name; action=$_.action; displayDecimal=$_.displayDecimal; default=$_.default; hive=$_.hive; key=$_.key; type=$_.type; value=$_.value; Values=$_.Values } }
+  AuditSetting = $temp[3].AuditSetting | % { [PSCustomObject]@{ PolicyTarget=$_.PolicyTarget; SubcategoryName = $_.SubcategoryName; SettingValue=$_.SettingValue } }
+  #RuleCollection = $temp[4].RuleCollection.type
+  DomainProfile = $temp[5].DomainProfile.ChildNodes | % { [PSCustomObject]@{ Name = $_.LocalName; Value=$_.Value } }  
+  PublicProfile = $temp[5].PublicProfile.ChildNodes | % { [PSCustomObject]@{ Name = $_.LocalName; Value=$_.Value } }  
+  PrivateProfile =$temp[5].PrivateProfile.ChildNodes | % { [PSCustomObject]@{ Name = $_.LocalName; Value=$_.Value } } 
+  RegistrySetting = $temp[7].RegistrySetting | % { [PSCustomObject]@{ KeyPath=$_.KeyPath; AdmSetting=$_.AdmSetting; Value=if (-not $_.Value) {$_.command}else{$_.Value.Name} } }
+}
+}
+
+function AskGPO($text) {
+ $exist=$false
+ while (-not $exist) {
+   $gpo = Read-Host $text
+   if ($gpo -eq $gpo1) { "Trying to use same name ???" | % {hl $_ $_ }; Write-host; continue }
+   $exist = [bool](Get-Gpo -Name $gpo -ea SilentlyContinue)
+   if (-not $exist) { hl "Wrong GPO name :'$gpo'" $gpo -bc Red } else { hl "GPO :'$gpo'" $gpo -fc Green };Write-host
+ }
+ return $gpo
+}
+
+function CompareScript {
+# 22H2C-V1 Bank & Country Credit   24H2C-V1 WIN 11 B&CC
+
+rv gpo1,gpo2 -ea SilentlyContinue
+$gpo1 = AskGPO "Provide first GPO name "
+$gpo2 = AskGPO "Provide second GPO name "
+
+$path = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
+$date = "$(get-date -Format 'yyyy-MM-dd_HH-mm')"
+
+Compare-GPO $gpo1 $gpo2 | tee "$path\GPO_$date.txt" | tee -Variable out
+
+Import-Module "$path\ImportExcel\7.4.1\ImportExcel.psd1"
+if (Get-Module -Name ImportExcel) { 
+ $out | Export-Excel -Path "$path\GPO_$date.xlsx" ; sleep -s 1; ii "$path\GPO_$date.xlsx" 
+}
+
+}
+
+function AutoUIcalc {
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$calc = [Diagnostics.Process]::Start('calc')
+#wait for the UI to appear
+$null = $calc.WaitForInputIdle(5000)
+sleep -s 2
+$calcWindowId = ((Get-Process).where{$_.MainWindowTitle -eq 'Calculator'})[0].Id
+$root = [Windows.Automation.AutomationElement]::RootElement
+$condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ProcessIdProperty, $calcWindowId)
+$calcUI = $root.FindFirst([Windows.Automation.TreeScope]::Children, $condition)
+
+function FindAndClickButton($name){
+	$condition1 = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ClassNameProperty, [System.Windows.Automation.ControlType]::Button)
+	$condition2 = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, $name)
+	$condition = New-Object Windows.Automation.AndCondition($condition1, $condition2)
+	$button = $calcUI.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+	$button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
+
+#get and click the buttons for the calculation
+
+FindAndClickButton Five
+FindAndClickButton Plus
+FindAndClickButton Nine
+FindAndClickButton Equals
+
+#get the result
+$condition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::AutomationIdProperty, "CalculatorResults")
+$result = $calcUI.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
+$result.current.name
+}
+
+function Skip_TPM_check_on_upgeade_v4 {
+@(set "0=%~f0"^)#) & powershell -nop -c iex([io.file]::ReadAllText($env:0)) & exit/b
+#:: double-click to run or just copy-paste into powershell - it's a standalone hybrid script
+#:: v4 of the toggle script uses programdata instead of system32, no longer deletes appraiserres.dll, and clears bypass folder
+#:: uses IFEO to attach to Virtual Disk Service Loader process running during setup, then creates a bypass dir
+#:: it must also do some ping-pong renaming of vdsldr in programdata
+#:: you probably don't need to have it installed at all times - just when doing feature updates or manual setup within windows
+#:: hence the on off toggle just by running the script again
+#:: can get 11 release beta or dev builds via Windows Update after using OfflineInsiderEnroll by whatever127 and abbodi1406
+
+$_Paste_in_Powershell = {
+$N = "Skip TPM Check on Dynamic Update"; $X = @("' $N (c) AveYo 2021 : v4 IFEO-based with no flashing cmd window")
+$X+= 'C = "cmd /q AveYo /d/x/r pushd %systemdrive%\\$windows.~bt\\Sources\\Panther && mkdir Appraiser_Data.ini\\AveYo&"'
+$X+= 'M = "pushd %allusersprofile%& ren vd.exe vdsldr.exe &robocopy ""%systemroot%/system32/"" ""./"" ""vdsldr.exe""&"'
+$X+= 'D = "ren vdsldr.exe vd.exe& start vd.exe -Embedding" : CreateObject("WScript.Shell").Run C & M & D, 0, False'
+$K = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\vdsldr.exe'
+$P = [Environment]::GetFolderPath('CommonApplicationData'); $F = join-path $P '11tpm.vbs'; $V = "wscript $F //B //T:5"
+if (test-path $K) {
+remove-item $K -force -ea 0 >''; del $F -force -ea 0; del (join-path $P 'vd.exe') -force -ea 0
+write-host -fore 0xf -back 0xd "`n $N v4 [REMOVED] run again to install "
+} else {
+new-item $K -force -ea 0 >''; set-itemproperty $K 'Debugger' $V -force -ea 0; [io.file]::WriteAllText($F, $X-join"`r`n")
+write-host -fore 0xf -back 0x2 "`n $N v4 [INSTALLED] run again to remove "
+} ; rmdir $([Environment]::SystemDirectory[0]+':\\$Windows.~BT\\Sources\\Panther') -rec -force -ea 0; timeout /t 5
+} ; start powershell -args "-nop -c & {`n`n$($_Paste_in_Powershell-replace'"','\"')}" -verb runas
+$_Press_Enter
+#::
+}
+
+function Skip_TPM_check_on_upgeade_v2 {
+@(set "0=%~f0"^)#) & powershell -nop -c iex([io.file]::ReadAllText($env:0)) & exit/b
+#:: double-click to run or just copy-paste into powershell - it's a standalone hybrid script
+#:: v2 of the toggle script comes to the aid of outliers for whom v1 did not work due to various reasons (broken/blocked/slow wmi)
+#:: uses IFEO instead to attach to the same Virtual Disk Service Loader process running during setup, then launches a cmd erase 
+#:: of appraiserres.dll - but it must also do some ping-pong renaming of the exe in system32\11 - great implementation nonetheless 
+#:: (for simplicity did not use powershell invoking CreateProcess and DebugActiveProcessStop to overcome IFEO constrains)
+#:: in v2 the cmd window will briefly flash while running diskmgmt - so it is not "better" per-se. just more compatible / reactive
+#:: you probably don't need to have it installed at all times - just when doing feature updates or manual setup within windows
+#:: hence the on off toggle just by running the script again
+
+$_Paste_in_Powershell = {
+  $N = 'Skip TPM Check on Dynamic Update'
+  $0 = sp 'HKLM:\SYSTEM\Setup\MoSetup' 'AllowUpgradesWithUnsupportedTPMOrCPU' 1 -type dword -force -ea 0
+  $B = gwmi -Class __FilterToConsumerBinding -Namespace 'root\subscription' -Filter "Filter = ""__eventfilter.name='$N'""" -ea 0
+  $C = gwmi -Class CommandLineEventConsumer -Namespace 'root\subscription' -Filter "Name='$N'" -ea 0
+  $F = gwmi -Class __EventFilter -NameSpace 'root\subscription' -Filter "Name='$N'" -ea 0
+  if ($B) { $B | rwmi } ; if ($C) { $C | rwmi } ; if ($F) { $F | rwmi }
+  $C = "cmd /q $N (c) AveYo, 2021 /d/x/r>nul (erase /f/s/q %systemdrive%\`$windows.~bt\appraiserres.dll"
+  $C+= '&md 11&cd 11&ren vd.exe vdsldr.exe&robocopy "../" "./" "vdsldr.exe"&ren vdsldr.exe vd.exe&start vd -Embedding)&rem;'
+  $K = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\vdsldr.exe'
+  if (test-path $K) {ri $K -force -ea 0; write-host -fore 0xf -back 0xd "`n $N [REMOVED] run again to install "; timeout /t 5}
+  else {$0=ni $K; sp $K Debugger $C -force; write-host -fore 0xf -back 0x2 "`n $N [INSTALLED] run again to remove ";timeout /t 5}
+} ; start -verb runas powershell -args "-nop -c & {`n`n$($_Paste_in_Powershell-replace'"','\"')}"
+$_Press_Enter
+#::
+
+}
+
+function Get-OfficeLogin {
+ $PCs = ((Get-ADComputer -Filter { OperatingSystem -NotLike "*server*" } -prop description, location) | Where-Object { $_.name -ne 'DRSVCENTRE' }) 
+ $out = foreach ($pc in $pcs.name){
+   Get-RemoteReg -PC $pc -HKEY CurrentUser -Path 'SOFTWARE\Microsoft\Office\16.0\Common\Identity\Profiles' | 
+    ? {$_.name -like "*@dealers.aib.pri*" } | 
+    % {  [PSCustomObject]@{ PC = $pc; user=(Logged-User $pc).USERNAME; value=$_.name  } }  
+ }
+ $out
+ ($out | measure).count
+ Export-Xlsx $out "G:\Inventory\_Lists\Office_SignIns_$(sdate).xlsx"
+ "G:\Inventory\_Lists\Office_SignIns_$(sdate).xlsx"
+}
+
+function Unc2local ($path) {
+  if ($Path -like "*$*"  ) {$Path.Substring($Path.IndexOf("$")-1).Replace('$',':') }
+}
+
 function hl {
+ param ( [string]$text, [string]$word, [System.ConsoleColor]$fc = 14, [System.ConsoleColor]$bc, [switch]$nonewline )
+  $text = ($text | Out-String).Trim()
+  $s = $text -split ([regex]::Escape($word))
+  Write-Host $s[0] -NoNewline
+  for ($i = 1; $i -lt $s.count; $i++) {  
+    $params = @{ Object = $word; NoNewline = $true; ForegroundColor = $fc }
+    if ($bc) { $params.BackgroundColor = $bc }
+    Write-Host @params
+    Write-Host $s[$i] -NoNewline
+  }
+  if (!$nonewline) { Write-Host }
+}
+
+function hl2 {
   param ( [string]$text, [string]$word, [System.ConsoleColor]$fc = 14, [System.ConsoleColor]$bc, [switch]$nonewline )
   $text = ($text | Out-String).Trim()
   $s = $text -split ([regex]::Escape($word))
@@ -76,7 +286,6 @@ function Get-Path($pc,$user,$no,$leaf) {
        "\\$($pc)\C$\Users\$($user)\AppData\Local\Microsoft\Outlook\*.ost" )
  if ($no) { if ($leaf) { $p[$no-1]+$leaf } else { $p[$no-1] } } else { $p }
 }
-
 
 function Get-Adi($id){
   if (-not (Test-Path variable:ADu)) { ADinfo }
@@ -293,7 +502,7 @@ function Pack-Edge {
 
 function Pack-Calypso {
   param ( [switch]$hex )
-  $fpath = '\\drscmsrv2\e$\SoftwarePackages\Calypso\'
+  $fpath = '\\drscmsrv2\e$\SoftwarePackages\Calypso\'; cd c:
   if ($hex) { $ex = '_hex' } else { $ex = '' }
   $fname = (Get-ChildItem "$fpath\*TR??$ex" | Sort-Object CreationTime -Descending | Select-Object -first 1).name  
   $TRver = ($fname | Select-String "TR(\d{2})").Matches.value 
@@ -415,7 +624,7 @@ function CM-Deploy {
   Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); Set-Location "DUB:\"
   $appsToDeploy = Get-CMApplication -Name $Apps | Select-Object -ExpandProperty LocalizedDisplayName 
   if (-not $AppsToDeploy) { Write-Host "No applications found matching the pattern '$Apps'" -ForegroundColor Yellow; return } else { $appsToDeploy }
-  hl "Deploying applications to collection: $Collection" "$Collection" -nonewline 1; hl ", start time: $StartTime , increment 15 min" "$StartTime"
+  hl "Deploying applications to collection: $Collection" "$Collection" -nonewline; hl ", start time: $StartTime , increment 15 min" "$StartTime"
   if ($WhatIf) { break }
 
   foreach ($app in $appsToDeploy) {
@@ -434,7 +643,9 @@ function CM-Deploy {
     $Result = New-CMApplicationDeployment @NewDep | Select-Object ApplicationName, CollectionName, StartTime
     Write-Host "Deployed: $($Result.ApplicationName) to $($Result.CollectionName) at $($Result.StartTime)" -ForegroundColor Cyan
     $StartTime = $StartTime.AddMinutes(15)
-  }; c:
+  }
+  Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName $Collection
+  c:
 }
 
 function Get-UserVariable {
@@ -1024,17 +1235,16 @@ function Test-ADCMWsusEpo {
     $_.WSUS_LastComm -lt (Get-Date).AddDays(-10) -or
     $_.EPO_LastComm -lt (Get-Date).AddDays(-10) -or
     $_.CM_LastComm -lt (Get-Date).AddDays(-10) } | Select-Object * 
-  $comps = ($comps | Sort-Object pc | Format-Table | Out-String).Trim()
-
-  if (-not $comps) { $comps = 0 }                    
+  $comps_out = ($comps | Sort-Object pc | Format-Table | Out-String).Trim()
+                
   $out = @"
 Number of PCs in AD   : $($ADList.Count)
 Number of PCs in CM   : $($CMList.Count)
 Number of PCs in ePO  : $($EpoList.Count)
 Number of PCs in WSUS : $($WSUSList.Count)
 
-Computers that have not called in to the systems for more than 10 days or are missing from any of the systems
-$($comps | Out-String)
+Computers that have not called in to the systems for more than 10 days or are missing from any of the systems $(($comps| Measure).Count)
+$($comps_out | Out-String)
 
 "@
   $out 
@@ -2560,8 +2770,20 @@ function Get-Mac($pc) {
 
 #static $cred = Get-Credential 
 function Get-MacAdm($pc) {
-  Get-WmiObject -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $pc -Credential $cred |
-  Select-Object -Property __SERVER, IPAddress, MACAddress, Description
+  Get-WmiObject -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $pc -Credential $cred 
+}
+
+function Get-MacSrv {
+ $a = Import-Excel "G:\Inventory\DRS infrastructure Inventory.xlsx" 
+ $cred = Get-Credential 
+ $l = ($a | ? { $_.'O/S Name' -like "*Windows*" -or $_.'O/S Name' -like "*Redhat*" }).dns
+ $p = $l | % { aping $_}
+ $m = $p.name | % { Get-MacAdm $_ }      
+ $o = $m | select __SERVER,MACAddress,IPAddress 
+ $o | % { $_.IPAddress = $_.IPAddress  -join ', ' -replace ', fe80::.*'  } 
+ $o = $o | ? { $_.IPAddress -notlike "169.*" -and $_.IPAddress -notlike "192.*" }
+ $o 
+ #Export-Desktop -obj $o -text srv
 }
 
 function Get-Displays($pc) {
