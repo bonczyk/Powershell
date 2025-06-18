@@ -107,10 +107,12 @@ $date = "$(get-date -Format 'yyyy-MM-dd_HH-mm')"
 
 Compare-GPO $gpo1 $gpo2 | tee "$path\GPO_$date.txt" | tee -Variable out
 
+<#
 Import-Module "$path\ImportExcel\7.4.1\ImportExcel.psd1"
 if (Get-Module -Name ImportExcel) { 
  $out | Export-Excel -Path "$path\GPO_$date.xlsx" ; sleep -s 1; ii "$path\GPO_$date.xlsx" 
 }
+#>
 
 }
 
