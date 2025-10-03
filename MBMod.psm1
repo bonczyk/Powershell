@@ -29,6 +29,16 @@ $CompressedByteArray = $MemoryStream.ToArray()
 [System.Net.NetworkCredential]::new("", $SecurePassword ).Password
 #>
 
+function Get-WinUpdProblem{
+ adinfo
+ $l = Ping-DealersPCs
+ $a = $l | % {[PScustomobject]@{pc=$_; folder=Test-Path "\\$_\c$\`$WINDOWS.~BT"} }
+ $b = ($a | ? {$_.folder}).pc
+ foreach ($pc in $b){
+  [PScustomobject]@{pc=$pc; Desc=($adc | ? {$_.name -eq $pc}).Description}
+ }
+}
+
 function Check-odd {
   c:;Test-Modules 
   $path = "\\drsitsrv1\DRSsupport$\Projects\2025\Windows 11 Deployment\Win11Deployment.xlsx"
@@ -1047,13 +1057,6 @@ function Deploy-CU($pc){
   Run-rc $pc { Add-WindowsPackage -Online -PackagePath "C:\Temp\inst\upd\windows11.0-kb5065426-x64.msu"  } -cred $cred
  }
 }
-# "C:\Temp\inst\upd\windows10.0-kb5065429-x64.msu"
-# "C:\Temp\inst\upd\windows11.0-kb5065426-x64.msu"
-# "C:\Temp\inst\upd\W10\SSU-19041.6271-x64.cab"
-# "C:\Temp\inst\upd\W10\Windows10.0-KB5065429-x64.cab"
-# Start-Process -FilePath C:\Temp\inst\upd\windows11.0-kb5065426-x64.msu -ArgumentList '/quiet','/log:c:\temp\logs\cu1.txt'
-# Add-WindowsPackage -Online -PackagePath "C:\Temp\inst\upd\windows11.0-kb5065426-x64.msu"
-# cmd > DISM /Online /Add-Package /PackagePath:C:\Temp\inst\upd\windows11.0-kb5065426-x64.msu
 
 function Deploy-Edge($pc) {
  if (! $cred) {$cred = Get-Credential -UserName dealers\dsk_58691 -Message 'pas'}
@@ -1083,40 +1086,29 @@ function Deploy-File ($PCs, $File, $path = "C:\Temp\inst\", $run, $cmd) {
 }
 
 function Run-r {
-  [CmdletBinding()] param( 
-    [Parameter(Mandatory = $True)] [string]$Pc, $cmd, [switch]$noesc
+  [CmdletBinding()] param(
+   [Parameter(Mandatory = $true)] [string]$Pc,
+   [Parameter(Mandatory = $true)] $Cmd,
+   [PSCredential]$Cred,
+   [switch]$NoEsc
   )
-  if (!$pc) { "No PC name provided"; break }; if (!(Aping $pc)) { 'Offline'; break }
-  if (!$noprase) { $cmd = $cmd -replace '"', '\$&' } # $cmd = "Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Teams*\`" }"
-  $rr = Run-Remote $pc "powershell -command `"Start-Transcript c:\Temp\logs\logs_r.txt -Append; ''; $cmd; Stop-Transcript;`""
-  while (Get-Process -ComputerName $pc -id $rr.ProcessId -ErrorAction SilentlyContinue) { Start-Sleep -m 200 }
-  $c = Get-Content "\\$pc\c$\Temp\logs\logs_r.txt" -Raw
-  ((($c -split '[\r\n]+(?=Transcript started)')[1] -split '\*\*\*\*+')[0] -split "`n`r" | Select-Object -Skip 1 | Out-String ).Trim()
-  <#
-  Run-r $pc { Get-AppxProvisionedPackage -Online | ? { $_.displayname -like "*teams*" } | Remove-AppxProvisionedPackage -Online }
-  Run-r $pc { DISM /Online /Add-ProvisionedAppxPackage /PackagePath:"c:\Temp\MSTeams-x64-n.msix" /SkipLicense /LogPath:"c:\Temp\Logs\Dism.txt" }
-  Run-r $pc { msiexec /i "c:\Temp\WIN.msi" ALLUSERS=1 /log c:\temp\logs\msiexec.txt }
-  Run-r 7TZXGL2-DUB { $updateSession = new-object -com "Microsoft.Update.Session"; $updates=$updateSession.CreateupdateSearcher().Search($criteria).Updates;wuauclt /reportnow }
- #>
+  if (!(Aping $Pc)) { Write-Warning 'Offline'; return }
+  $logFile = 'C:\Temp\logs\RunR.txt'
+  if (!$NoEsc) { $cmd = $cmd -replace '"', '\$&' }
+  $rCmd = "powershell -command `"Start-Transcript $logFile -Append; $Cmd; Stop-Transcript;`""
+  $rp = If ($Cred) { Run-Remote $Pc $rCmd -Cred $Cred } else { Run-Remote $Pc $rCmd }
+  while (Get-Process -ComputerName $Pc -id $rp.ProcessId -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 200 }
+  $c = Get-Content "\\$pc\$($logFile -replace ':','$')" -Raw
+  $out = ((($c -split '[\r\n]+(?=Transcript started)')[1] -split '\*\*\*\*+')[0] -split "`n`r" | Select-Object -Skip 1 | Out-String ).Trim()
+  return $out.Trim()
 }
 
-function Run-rc {
-  [CmdletBinding()] param( 
-    [Parameter(Mandatory = $True)] [string]$Pc, $cmd, [switch]$noesc, [PSCredential] $cred
-  )
-  if (!$pc) { "No PC name provided"; break }; if (!(Aping $pc)) { 'Offline'; break }
-  if (!$noprase) { $cmd = $cmd -replace '"', '\$&' } # $cmd = "Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Teams*\`" }"
-  $rr = Run-RemoteCred $pc "powershell -command `"Start-Transcript c:\Temp\logs\logs_rc1.txt -Append; ''; $cmd; Stop-Transcript;`"" -cred $cred
-  while (Get-Process -ComputerName $pc -id $rr.ProcessId -ErrorAction SilentlyContinue) { Start-Sleep -m 200 }
-  $c = Get-Content "\\$pc\c$\Temp\logs\logs_rc1.txt" -Raw
-  ((($c -split '[\r\n]+(?=Transcript started)')[1] -split '\*\*\*\*+')[0] -split "`n`r" | Select-Object -Skip 1 | Out-String ).Trim()
-  <#
-  Run-rc $pc { Get-AppxProvisionedPackage -Online | ? { $_.displayname -like "*teams*" } | Remove-AppxProvisionedPackage -Online }
-  Run-rc $pc { DISM /Online /Add-ProvisionedAppxPackage /PackagePath:"c:\Temp\MSTeams-x64-n.msix" /SkipLicense /LogPath:"c:\Temp\Logs\Dism.txt" }
-  Run-rc $pc { msiexec /i "c:\Temp\WIN.msi" ALLUSERS=1 /log c:\temp\logs\msiexec.txt }
-  Run-rc 7TZXGL2-DUB { $updateSession = new-object -com "Microsoft.Update.Session"; $updates=$updateSession.CreateupdateSearcher().Search($criteria).Updates;wuauclt /reportnow }
- #>
-}
+<#
+ Run-r $pc { Get-AppxProvisionedPackage -Online | ? { $_.displayname -like "*teams*" } }
+ Run-r $pc { DISM /Online /Add-ProvisionedAppxPackage /PackagePath:"c:\Temp\MSTeams-x64-n.msix" /SkipLicense /LogPath:"c:\Temp\Logs\Dism.txt" }
+ Run-r $pc { msiexec /i "c:\Temp\WIN.msi" ALLUSERS=1 /log c:\temp\logs\msiexec.txt }
+ Run-r 7TZXGL2-DUB { $updateSession = new-object -com "Microsoft.Update.Session"; $updates=$updateSession.CreateupdateSearcher().Search($criteria).Updates;wuauclt /reportnow }
+#>
 
 function Run-Rcmd($Pc, $Cmd, $Timeout = 3,$OutFile='C:\temp\logs\RunRcmd.txt', $CurrentDir=’C:\temp’) {
   $rr = Run-Remote $pc ($cmd+' >'+$OutFile+' 2>&1')
@@ -1124,30 +1116,8 @@ function Run-Rcmd($Pc, $Cmd, $Timeout = 3,$OutFile='C:\temp\logs\RunRcmd.txt', $
   Get-Content "\\$pc\$($OutFile -replace ':','$')" -Raw 
 }
 
-function Run-Remote($Pc, $Cmd, $Timeout = 3, $CurrentDir = ’C:\temp’) {
-  if (!(Aping $pc)) { 'Offline'; break }
-  $opt = New-CimSessionOption -Protocol DCOM
-  try {
-    $s = New-CimSession -Computername $pc -SessionOption $opt -OperationTimeoutSec $timeout -ErrorAction Stop  
-    Invoke-CimMethod Win32_Process -method Create @{CommandLine = "cmd /c $cmd"; CurrentDirectory = $CurrentDir } -CimSession $s
-    Remove-CimSession $s 
-  }
-  catch { $false } 
-}
-
 # usage cmd : Run-Remote w10-mb "dir nosuchfile.txt > c:\temp\mm.txt 2>&1"
 # usage ps  : Run-Remote W10-mb "powershell -command ""gci C:\Temp | Out-File C:\temp\aa_ll.txt"" "
-
-function Run-Remote2($Pc, $Cmd, $Timeout = 3, $CurrentDir = ’C:\temp’) {
-  $opt = New-CimSessionOption -Protocol DCOM
-  try {
-    $s = New-CimSession -Computername $pc -SessionOption $opt -OperationTimeoutSec $timeout -ErrorAction Stop  
-    Invoke-CimMethod Win32_Process -method Create @{CommandLine = $cmd; CurrentDirectory = $CurrentDir } -CimSession $s
-    Remove-CimSession $s 
-  }
-  catch { $false } 
-}
-
 <#
 AIB MENU
 $c = "msiexec.exe /qn /i ""C:\Temp\Rocket Passport To PC Host\Passport.msi"" /quiet /qn LICENSE=""DRKV-FG92-1COQ-KB7P"" ALLUSERS=2 USERDATADIR=""C:\Program Files (x86)\PASSPORT\"""
@@ -1155,18 +1125,27 @@ $pc = "6NS9MM2-DUB"
 Run-Remote $pc $c
 #>
 
-function Run-RemoteCred($Pc, $Cmd, $Timeout = 3, $CurrentDir = ’C:\temp’, [PSCredential]$cred) {
+function Run-Remote {
+[CmdletBinding()] param(
+   [Parameter(Mandatory)] $Pc,
+   [Parameter(Mandatory)] $Cmd,
+   [int]$Timeout = 3,
+   [string]$CurrentDir = 'C:\temp',
+   [switch]$UseWMI,
+   [PSCredential]$Cred,
+   [switch]$RawCmd
+  )
+  if ($UseWMI) { return ([WMICLASS]"\\$Pc\ROOT\CIMV2:win32_process").Create($Cmd).ProcessId } # WMI logic (old style) 
+  if (!(Aping $Pc)) { return 'Offline' }
   $opt = New-CimSessionOption -Protocol DCOM
   try {
-    $s = New-CimSession -Computername $pc -SessionOption $opt -OperationTimeoutSec $timeout -ErrorAction Stop -Credential $cred
-    Invoke-CimMethod Win32_Process -method Create @{CommandLine = "cmd /c $cmd"; CurrentDirectory = $CurrentDir } -CimSession $s
-    Remove-CimSession $s 
-  }
-  catch { $false } 
-}
-
-function Run-Remote_WMIold($pc, $cmd) {
- ([WMICLASS]"\\$pc\ROOT\CIMV2:win32_process").Create($cmd).ProcessId
+   if ($Cred) { $s = New-CimSession -Computername $Pc -SessionOption $opt -OperationTimeoutSec $Timeout -ErrorAction Stop -Credential $Cred}
+    else { $s = New-CimSession -Computername $Pc -SessionOption $opt -OperationTimeoutSec $Timeout -ErrorAction Stop }
+   $cmdLine = if ($RawCmd) { $Cmd } else { "cmd /c $Cmd" }
+   $result = Invoke-CimMethod Win32_Process -method Create @{CommandLine = $cmdLine; CurrentDirectory = $CurrentDir } -CimSession $s
+   Remove-CimSession $s
+   return $result
+  } catch { return $false }
 }
 
 function PraseNetUse($netuse = (net use)) {
@@ -1412,7 +1391,7 @@ function Test-Modules2 {
 function Test-Modules {
   Init
   Import-Module "$ModuleDir\ImportExcel\7.4.1\ImportExcel.psd1" -Global -WA SilentlyContinue
-  #Import-Module "$ModuleDir\MSCatalog\MSCatalog.psd1" -Global -WA SilentlyContinue
+  # Import-Module "$ModuleDir\MSCatalog\MSCatalog.psd1" -Global -WA SilentlyContinue
 }
 
 function Me-Import {
@@ -1566,9 +1545,6 @@ $($comps_out | Out-String)
 }
 
 
-
-
-
 function Close-File($pc = 'DrsCorpSrv2', $name = "*xls*", $user = "*", $ReallyClose = 0) {
   #*Activity Report
   if (Test-Path variable:cred) { if ($cred.UserName -ne 'adm_58691') { $cred = Get-Credential adm_58691 } } else { $cred = Get-Credential adm_58691 }
@@ -1638,7 +1614,6 @@ Export-Desktop $out 'SSD'
 function Get-Model($pc) {
  (Get-WmiObject Win32_ComputerSystem -ComputerName $pc).Model
 }
-
 
 function KMS($pc) {
   #/ckms
@@ -2008,6 +1983,7 @@ function Export-Xlsx ($obj, $path) {
 }
 
 function Export-Desktop ($obj, $text) {
+  Test-Modules
   Export-Xlsx $obj "$(DesktopPath)$(sDate $text'_').xlsx"
 }
 
@@ -2096,7 +2072,6 @@ function Set-RemoteRegRecursive ($PC, [Microsoft.Win32.RegistryHive] $HKEY, $Pat
   }
   catch { $false } 
 }
-
 
 
 function UncToLocal($path) {
@@ -2227,28 +2202,6 @@ function Ping-DealersPCs {
   APingN($adc.name)
 }
 
-function Write-Color2() {
-    Param (
-        [string] $text = $(Write-Error "You must specify some text"),
-        [switch] $NoNewLine = $false
-    )
-    $startColor = $host.UI.RawUI.ForegroundColor;
-    $text.Split( [char]"{", [char]"}" ) | ForEach-Object { $i = 0; } {
-        if ($i % 2 -eq 0) {
-            Write-Host $_ -NoNewline;
-        } else {
-            if ($_ -in [enum]::GetNames("ConsoleColor")) {
-                $host.UI.RawUI.ForegroundColor = ($_ -as [System.ConsoleColor]);
-            }
-        }
-        $i++;
-    }
-    if (!$NoNewLine) {
-        Write-Host;
-    }
-    $host.UI.RawUI.ForegroundColor = $startColor;
-}
-
 Function Set-ConsoleWindowTitle($Title) {
   $host.ui.RawUI.WindowTitle = $Title
 }
@@ -2259,7 +2212,7 @@ function Set-Console($title, $width, $height) {
   if ($height) { [console]::WindowHeight = $height }
 }
 
-function SetWinTitle($p, $text) {
+function Set-WinTitle($p, $text) {
   if ("Win32Api" -as [type]) {} else {
     Add-Type -TypeDefinition @"
 using System;
@@ -2343,11 +2296,11 @@ Function Execute-Command ($commandTitle, $commandPath, $commandArguments) {
 
 }
 
-function RemoteCmd($pc) {
+function RemoteCmd-Psexec($pc) {
   $Psexec = (Get-Module invokepsexec).ModuleBase + '\PsExec.exe'   # & $psexec \\$pc cmd.exe  # same window
   $proc = Start-Process "$psexec" "\\$pc cmd" -PassThru                       # Invoke-PsExec $pc -Command 'hostname'
   Start-Sleep -m 1500
-  SetWinTitle $proc "cmd on $pc"
+  Set-WinTitle $proc "cmd on $pc"
 }
 
 function New-PSWin($in) {
@@ -2366,9 +2319,12 @@ function Copy-MyModule{
 $p1 = 'H:\MB\PS\modules\MBMod\0.3'
 $p2 = 'C:\H\MB\PS\modules\MBMod\0.3'
 $p3 = 'Z:\DRS Support\DRSconsole\modules\MBMod\0.3'
-
+$p4 = 'C:\Users\dsk_58691\Desktop\DRSconsole\modules\MBMod\0.3'
+$p5 = '\\DDCGV04-DUB\c$\Users\dsk_97474\Desktop\DealersPs\modules\MBMod\0.3'
 Copy-Item $P1\MBMod.psm1 $P2 -Verbose 
 Copy-Item $P1\MBMod.psm1 $P3 -Verbose 
+Copy-Item $P1\MBMod.psm1 $P4 -Verbose
+Copy-Item $P1\MBMod.psm1 $P5 -Verbose
 }
 
 function Menu ($Title, [array]$opt) {
@@ -2380,11 +2336,11 @@ function Menu ($Title, [array]$opt) {
   }
 }
 
-function Write-Color([String[]]$Text, [ConsoleColor[]]$Color) {
+function Write-Color([String[]]$Text, [ConsoleColor[]]$Color,[Switch]$NoNewLine) {
     for ($i = 0; $i -lt $Text.Length; $i++) {
         Write-Host $Text[$i] -Foreground $Color[$i] -NoNewLine
     }
-    Write-Host
+    if (!$NoNewLine) { Write-Host }
     # Write-Color -Text Red,White,Blue -Color Red,White,Blue
 }
 
@@ -2397,6 +2353,28 @@ function Show-Colors( ) {
     Write-Host (" {0,2} {1,$max} " -f [int]$color,$color) -NoNewline
     Write-Host "$color" -Foreground $color
   }
+}
+
+function Write-Color2() {
+    Param (
+        [string] $text = $(Write-Error "You must specify some text"),
+        [switch] $NoNewLine = $false
+    )
+    $startColor = $host.UI.RawUI.ForegroundColor;
+    $text.Split( [char]"{", [char]"}" ) | ForEach-Object { $i = 0; } {
+        if ($i % 2 -eq 0) {
+            Write-Host $_ -NoNewline;
+        } else {
+            if ($_ -in [enum]::GetNames("ConsoleColor")) {
+                $host.UI.RawUI.ForegroundColor = ($_ -as [System.ConsoleColor]);
+            }
+        }
+        $i++;
+    }
+    if (!$NoNewLine) {
+        Write-Host;
+    }
+    $host.UI.RawUI.ForegroundColor = $startColor;
 }
 
 function Menu2 ($Title, [array]$opt) {
@@ -2460,6 +2438,7 @@ function Check-Specials($in) {
    {$_ -in '`3','.3',',3'} {Write-Host 'ReImportmodule ..'; Me-Import }
    {$_ -in '`4','.4',',4'} {Write-Host 'Clear-Host..'; Clear-Host;Write-Host }
    {$_ -in '`5','.5',',5'} {Write-Host 'Show-Init ..'; Show-Init }
+   {$_ -in '`6','.6',',6'} {Write-Host 'Show-Colors ..'; Show-Colors }
  }
  
 }
@@ -2474,7 +2453,6 @@ function Show-Extras {
  }
  wysw ($Host.UI.RawUI.WindowSize.Width -40) 0 $(Get-Date -F F) Yellow 
 }
-
 
 function CheckInput {
   $pos = $Host.UI.RawUI.CursorPosition # @{X=$x;Y=$y}
@@ -2502,7 +2480,7 @@ function CheckInput {
     [array]$u = SearchAll $inp
     if ($u) {
       Write-host
-      ( $u | Select-Object L, Name, Desc, Office | Format-Table -HideTableHeaders | Out-String).TrimEnd() | Out-Host
+      hl ($u | Select-Object L, Name, Desc, Office | Format-Table -HideTableHeaders | Out-String).Trim() $inp Cyan
       Write-host   
     }
     else { Write-host "- Nothing found with - $inp" }
@@ -2585,7 +2563,8 @@ function Check-PC($pc) {
   if ($psise) {Menu "Choose option" $Opt } else {Menu2 "Choose option" $Opt}
   '' 
   Show-Extras
-  $inp = Read-Host "[1-$($Opt.count-1)] "
+  #$inp = Read-Host "[1-$($Opt.count-1)] "
+  Write-Color '[',"1-$($Opt.count-1)",'] : ' Green,Yellow,Green -NoNewLine; $inp = Read-Host
   Check-Specials $inp
   switch ($inp) {
     '1' { Invoke-Item "\\$pc\c$" }
@@ -2657,15 +2636,18 @@ function New-MSTSC($PCs) {
 function New-MSTSCpwd($PCs,$User) {
   if ($pr.UserName -notcontains $user) { Get-Cred $User }
   $wsh = New-Object -Com wscript.shell;
-  $PCs | ForEach-Object { New-MSTSCrdp $_ $User; Start-Sleep -m 100; [void]$wsh.AppActivate('Windows Security'); Start-Sleep -m 300; [void]$wsh.SendKeys("$(Get-Cred $User 1){ENTER}") } 
+  $PCs | ForEach-Object { New-MSTSCrdp $_ $User; Start-Sleep -m 200; [void]$wsh.AppActivate('Windows Security'); Start-Sleep -m 300; [void]$wsh.SendKeys("$(Get-Cred $User 1){ENTER}") } 
 }
 
 function New-MSTSCrdp($PC,$User){
+ if (-not (Aping($pc))) { Write-Color "Computer is Offline" Yellow; break}
  $rdp = "$ModulePath\rdp.rdp"
   #full address:s:$pc  #username:s:Dealers\$user
  (Get-Content $rdp) -replace "Dealers\\.*","Dealers\$user" -replace "full address:s:.*","full address:s:$pc" | Set-Content $ModulePath\r.rdp
  $a = List-Windows
- ii $ModulePath\r.rdp
+ #ii $ModulePath\r.rdp
+ $p = Start-Process mstsc -ArgumentList "$ModulePath\r.rdp" -PassThru
+ [void]$p.WaitForInputIdle(4000)
  sleep -s 1
  $b = List-Windows
  $f = Get-Fore
@@ -2742,7 +2724,7 @@ function New-DameWare($pc) {
 }
 
 function New-PingWindow($ip) {
-  start-process cmd -ArgumentList "/C", "mode con:cols=55 lines=10 && title Ping $ip && powershell -command ""&{(get-host).ui.rawui.buffersize=@{width=55;height=200};}"" && ping $ip -t"
+  start-process C:\Windows\System32\conhost.exe -ArgumentList "cmd /c mode con:cols=55 lines=10 && title Ping $ip && powershell -command ""(get-host).ui.rawui.buffersize=@{width=55;height=200}"" && ping $ip -t"
 }
 
 
