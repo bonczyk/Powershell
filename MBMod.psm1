@@ -1,33 +1,9 @@
 <#
  Import-Module "$($ENV:SMS_ADMIN_UI_PATH)\..\ConfigurationManager.psd1"; cd DUB:
- Import-Module "\\drsitsrv1\DRSsupport$\Projects\2022\Test-BCS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
  Import-Module "H:\MB\PS\modules\MBMod\0.3\MBMod.psm1" -Force -WarningAction SilentlyContinue
  Import-Module ".\MBMod.psm1" -Force -WarningAction SilentlyContinue
- [Management.Automation.WildcardPattern]::Escape('test[1].txt (foo)')
- Run-Remote $pc "powershell -command `"Start-Transcript c:\temp\log_appx.txt; Get-appxprovisionedpackage –online -Verbose | where-object {`$_.displayname -like \`"*Edge*\`" }; Stop-Transcript`""
 #> 
-<#
- adinfo
- $l = Ping-DealersPCs
 
- $out = $l | % {  [PSCustomObject]@{ PC = $_; $adc.name | % {Get-InstalledApp $_ "*Edge"} | Select ComputerName,AppName,AppVersion ) } }
- $a = $out.folder | % { [PSCustomObject]@{ PC = $_.DirectoryName; size=$_.Length } }
-
- $list = $l | % { $path ="\\$_\c$\Temp\Logs\11023_*.txt";  if (Test-Path $path) { [PSCustomObject]@{ PC = $_; folder=(gci $path ) } } }
- $list.folder | % { PraseNetUse (gc $_) } | select -Unique Remote
- 
-$MemoryStream = [System.IO.MemoryStream]::new()
-$Compressor = [System.IO.Compression.DeflateStream]::new($MemoryStream,[System.IO.Compression.CompressionMode]::Compress)
-$CompressionWriter = [System.IO.StreamWriter]::new($Compressor)
-$CompressionWriter.Write($mystring)
-$CompressedByteArray = $MemoryStream.ToArray()
-
-[Management.Automation.WildcardPattern]::Escape('test[1].txt (foo)')
-[regex]::Escape("test[1].txt (foo)")
-
-
-[System.Net.NetworkCredential]::new("", $SecurePassword ).Password
-#>
 
 function Get-WinUpdProblem{
  adinfo
@@ -5501,20 +5477,15 @@ Function Get-ScreenColor {
   #Requires -Version 4.0
 
   [CmdletBinding(DefaultParameterSetName = 'None')]
-
   param(
     [Parameter(
       Mandatory = $true,
       ParameterSetName = "Pos"
-    )]
-    [Int]
-    $X,
+    )][Int]$X,
     [Parameter(
       Mandatory = $true,
       ParameterSetName = "Pos"
-    )]
-    [Int]
-    $Y
+    )][Int]$Y
   )
     
   if ($PSCmdlet.ParameterSetName -eq 'None') {
@@ -5545,7 +5516,23 @@ Function Get-ScreenColor {
 }
 
 <#
+ adinfo
+ $l = Ping-DealersPCs
 
+ $out = $l | % {  [PSCustomObject]@{ PC = $_; $adc.name | % {Get-InstalledApp $_ "*Edge"} | Select ComputerName,AppName,AppVersion ) } }
+ $a = $out.folder | % { [PSCustomObject]@{ PC = $_.DirectoryName; size=$_.Length } }
+
+ $list = $l | % { $path ="\\$_\c$\Temp\Logs\11023_*.txt";  if (Test-Path $path) { [PSCustomObject]@{ PC = $_; folder=(gci $path ) } } }
+ $list.folder | % { PraseNetUse (gc $_) } | select -Unique Remote
+ 
+ $MemoryStream = [System.IO.MemoryStream]::new()
+ $Compressor = [System.IO.Compression.DeflateStream]::new($MemoryStream,[System.IO.Compression.CompressionMode]::Compress)
+ $CompressionWriter = [System.IO.StreamWriter]::new($Compressor)
+ $CompressionWriter.Write($mystring)
+ $CompressedByteArray = $MemoryStream.ToArray()
+#>
+
+<#
 
 # getting first domain component value from distinguishedName
 $user.DistinguishedName -replace '^.*?DC=|,DC=.*$'
@@ -5565,43 +5552,10 @@ List a Cm Group
 Add computer to Collection
 (Get-CMCollectionMember -CollectionName 'Office 2016 group 5').name | % { Add-CMDeviceCollectionDirectMembershipRule -CollectionName “Group 2” -ResourceID (Get-CMDevice -Name $_).ResourceID }
 
-SCCM
-new collection
-3..10 | % { $NewCol = New-CMDeviceCollection -Name “Group $($_)” -LimitingCollectionName “All Clients” -RefreshType Both 
-Move-CMObject -FolderPath “.\DeviceCollection\22H2 Upgrade” -InputObject $NewCol}
+'ss s s    s s ' -replace '\s+', ' '
 
-
-
-# get MAC Address
-# Solution 1
-Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName 3R6DG52-DUB | 
-Select-Object -Property MACAddress, Description
- 
-# Solution 2
-Get-WmiObject -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled='True'" -ComputerName $pc | 
-Select-Object -Property MACAddress, Description
- 
-
- # taskkill /s 6PN6MM2-DUB /fi "IMAGENAME eq excel*"
-# set-itemproperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value 1
-#  'ss s s    s s ' -replace '\s+', ' '
-
-
-
-working -  $returnval = ([WMICLASS]"\\W10-MB\ROOT\CIMV2:win32_process").Create("C:\Temp\jre-8u311-windows-i586.exe `/s")
+$returnval = ([WMICLASS]"\\W10-MB\ROOT\CIMV2:win32_process").Create("C:\Temp\jre-8u311-windows-i586.exe `/s")
 
 ([WMICLASS]"\\7V0TGL2-BCS\ROOT\CIMV2:win32_process").Create("\\W10-mb\c$\Temp\jre-8u311-windows-i586.exe `/s")
-
-
-$staging.Name | % { 
- ADD-ADGroupMember "BCM Deployment Group Win 10" –members "$_$" -Verbose
- $ou = (Get-ADOrganizationalUnit -Filter { name -like "Treasury Win 10 PC*" }).DistinguishedName
- get-adcomputer $_ | Set-ADComputer -Description "CP Build (on bench)" -PassThru -Verbose | Move-ADObject -TargetPath "$ou" -Verbose
-}
-
-iex ${using:function:Test-Modules}.Ast.Extent.Text;Test-Modules
-
-
-(Get-ADPrincipalGroupMembership (Get-ADComputer w10-mb).DistinguishedName).name | ? { $_ -like "*deploy*"}
 
 #>
