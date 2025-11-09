@@ -93,7 +93,7 @@ function Get-Canonical($pc) {
 
 function CM-AddtoCollection($pc,$collection){
  CM-LoadModule
- $pc | % { Add-CMDeviceCollectionDirectMembershipRule -CollectionName "$collection” -ResourceID (Get-CMDevice -Name $_).ResourceID }
+ $pc | % { Add-CMDeviceCollectionDirectMembershipRule -CollectionName "$collection" -ResourceID (Get-CMDevice -Name $_).ResourceID }
  cd c:
 }
 
@@ -2950,7 +2950,7 @@ function Check-Logs ($pc, $LastHours) {
 function Get-UpdatesRemotly ($pc) {
   if ($pc -eq "") { $pc = $env:COMPUTERNAME }
   Try {
-    $session = [activator]::CreateInstance([type]::GetTypeFromProgID(“Microsoft.Update.Session”, $pc))
+    $session = [activator]::CreateInstance([type]::GetTypeFromProgID(“Microsoft.Update.Session", $pc))
     $searcher = $session.CreateUpdateSearcher()
     $totalupdates = $searcher.GetTotalHistoryCount()
     $all = $searcher.QueryHistory(0, $totalupdates)
@@ -3219,7 +3219,7 @@ function InputBox {
 function MessageBox {
   [reflection.assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
   [System.Windows.Forms.Application]::EnableVisualStyles()
-  [System.Windows.Forms.MessageBox]::Show("Would you like a MessageBox popup ?", "This is a question !", "YesNoCancel") #"Ok” , "Error”, "AbortRetryIgnore” , "Warning”
+  [System.Windows.Forms.MessageBox]::Show("Would you like a MessageBox popup ?", "This is a question !", "YesNoCancel") #"Ok" , "Error", "AbortRetryIgnore" , "Warning"
   [System.Windows.Forms.MessageBox]::Show("Would you like a MessageBox popup ?", "This is a warning !", "AbortRetryIgnore" , "Warning")
   [Enum]::GetNames([System.Windows.Forms.MessageBoxIcon])
   [Enum]::GetNames([System.Windows.Forms.MessageBoxButtons])
@@ -3880,8 +3880,8 @@ Function old_schTask {
 }
 
 function Loge($text) {
-  New-EventLog –LogName Application –Source “MBmod Script” -ErrorAction SilentlyContinue 
-  Write-EventLog –LogName Application –Source “MBmod Script” –EntryType Information –EventID 1 –Message $text
+  New-EventLog –LogName Application –Source “MBmod Script" -ErrorAction SilentlyContinue 
+  Write-EventLog –LogName Application –Source “MBmod Script" –EntryType Information –EventID 1 –Message $text
 }
 
 Function pause1 ($message) {
@@ -4498,10 +4498,10 @@ function SCCM-ForceUpd($pc) {
 
 function SCCM-Refresh($pc) {
   ([wmiclass]"\\$pc\root\ccm:SMS_Client").TriggerSchedule("{00000000-0000-0000-0000-000000000001}")
-  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000002}”
-  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000003}”
-  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000021}”
-  # Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000102}”
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000002}"
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000003}"
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000021}"
+  # Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000102}"
   Invoke-CimMethod -Namespace 'root\ccm' -ClassName 'sms_client' -MethodName TriggerSchedule -Arguments @{sScheduleID = "{00000000-0000-0000-0000-000000000002}" }
 }
 
@@ -5579,7 +5579,7 @@ List a Cm Group
 (Get-CMCollectionMember -CollectionName 'Group 2').name | % { [PSCustomObject]@{PC=$_; Desc=(Get-ADComputer $_ -Properties description).description}  }
 
 Add computer to Collection
-(Get-CMCollectionMember -CollectionName 'Office 2016 group 5').name | % { Add-CMDeviceCollectionDirectMembershipRule -CollectionName “Group 2” -ResourceID (Get-CMDevice -Name $_).ResourceID }
+(Get-CMCollectionMember -CollectionName 'Office 2016 group 5').name | % { Add-CMDeviceCollectionDirectMembershipRule -CollectionName “Group 2" -ResourceID (Get-CMDevice -Name $_).ResourceID }
 
 'ss s s    s s ' -replace '\s+', ' '
 
