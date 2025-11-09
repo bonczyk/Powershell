@@ -47,7 +47,7 @@ function Win11-Check {
   foreach ($pc in $done.pc) {
    $pcx = $xl | ? { $_.name -eq $pc }
    $index = $xl.IndexOf($pcx) + 2
-   if ($xp.'Info'.Cells["A$index"].value -eq $pc) { "Changing $pc, index = $index, OK "; $xp.'Info'.Cells["J$index"].value = 'ü' } 
+   if ($xp.'Info'.Cells["A$index"].value -eq $pc) { "Changing $pc, index = $index, OK "; $xp.'Info'.Cells["J$index"].value = 'ĂĽ' } 
   }
   Close-ExcelPackage $xp 
  }
@@ -77,7 +77,7 @@ function Win11-DeployDone($pcin) {
    $pcx = $xl | ? { $_.name -eq $pc.name }
    #Write-host ($pcx.'Old PC OU' -replace 10,11 -replace 'W11','Win 11' -replace "^.*/")
    $ou = (Get-ADou ($pcx.'Old PC OU' -replace 10,11 -replace "^.*/" -replace 'W11','Win 11')  ) | select -first 1 
-   if ($pcx.ok -eq 'ü') { "$($pc.name) moving to $($ou.name)"; Move-ADObject $pc $($ou.DistinguishedName) -Verbose }
+   if ($pcx.ok -eq 'ĂĽ') { "$($pc.name) moving to $($ou.name)"; Move-ADObject $pc $($ou.DistinguishedName) -Verbose }
  }
 }
 
@@ -853,8 +853,8 @@ function Get-approved {
   #$updates = $wsus.GetUpdates($updateScope)
 
   $updatescope.ApprovedStates = [Microsoft.UpdateServices.Administration.ApprovedStates]::LatestRevisionApproved
-  $approvals = $wsus.GetUpdateApprovals($updatescope) | Select-Object @{L = ’ComputerTargetGroup’; E = { $_.GetComputerTargetGroup().Name } },
-  @{L = ’UpdateTitle’; E = { ($wsus.GetUpdate([guid]$_.UpdateId.UpdateId.Guid)).Title } }, GoLiveTime, AdministratorName, @{L = ’UpdateId’; E = { [guid]$_.UpdateId.UpdateId.Guid } } | Where-Object { $_.ComputerTargetGroup -like "*Win 10*" }  #| sort-object -Property UpdateTitle -Unique | sort GoLiveTime | ft 
+  $approvals = $wsus.GetUpdateApprovals($updatescope) | Select-Object @{L = "ComputerTargetGroup"; E = { $_.GetComputerTargetGroup().Name } },
+  @{L = "UpdateTitle"; E = { ($wsus.GetUpdate([guid]$_.UpdateId.UpdateId.Guid)).Title } }, GoLiveTime, AdministratorName, @{L = "UpdateId"; E = { [guid]$_.UpdateId.UpdateId.Guid } } | Where-Object { $_.ComputerTargetGroup -like "*Win 10*" }  #| sort-object -Property UpdateTitle -Unique | sort GoLiveTime | ft 
 
   [regex]::match($txt, 'KB(\d+)').value
 
@@ -1056,7 +1056,7 @@ function Run-r {
  Run-r 7TZXGL2-DUB { $updateSession = new-object -com "Microsoft.Update.Session"; $updates=$updateSession.CreateupdateSearcher().Search($criteria).Updates;wuauclt /reportnow }
 #>
 
-function Run-Rcmd($Pc, $Cmd, $Timeout = 3,$OutFile='C:\temp\logs\RunRcmd.txt', $CurrentDir=’C:\temp’) {
+function Run-Rcmd($Pc, $Cmd, $Timeout = 3,$OutFile='C:\temp\logs\RunRcmd.txt', $CurrentDir="C:\temp") {
   $rr = Run-Remote $pc ($cmd+' >'+$OutFile+' 2>&1')
   while (Get-Process -ComputerName $pc -id $rr.ProcessId -ErrorAction SilentlyContinue) { Start-Sleep -m 200 }
   Get-Content "\\$pc\$($OutFile -replace ':','$')" -Raw 
@@ -1136,7 +1136,7 @@ function Get-PcInfoDesktops {
 }
 
 function Get-Drama {
-  $year = Get-Date –f yyyy
+  $year = Get-Date -f yyyy
   $qtr = [math]::Ceiling((Get-Date).Month / 3) 
   $file = "G:\DRAMA\$year\$($year)Q$($qtr)\DRAMA Dashboard $year Q$qtr.xlsx"
   Import-Excel $file -WorksheetName 'email log' | Tee-Object -Variable global:Drama
@@ -1193,7 +1193,7 @@ function Init {
   $global:upath = "$ScriptPath\users.xlsx"
   $global:cpath = "$ScriptPath\comps.xlsx"
   $global:logp = "Z:\DRS Support\Finish Build\DRSlog.txt"
-  #"Mß v1.6"
+  #"MĂź v1.6"
   #Show-Init
 }
 
@@ -1234,8 +1234,10 @@ function S-Init {
 }
 
 function lg($txt) {
- if ($txt) { $txt | Out-File $logp -Append }
-  else { "`n$(Get-Date)`n$(S-Init | Out-String)" | Out-File $logp -Append }
+ if (Test-Path $logp) {
+  if ($txt) { $txt | Out-File $logp -Append }
+   else { "`n$(Get-Date)`n$(S-Init | Out-String)" | Out-File $logp -Append }
+ }
 }
 
 function check-lock($file){
@@ -1264,12 +1266,12 @@ The change involves the rollout of a new version of Microsoft Edge $ver to all c
 
 When is it scheduled to be implemented? (Start & End Dates/Times)
 
-$(Get-Date $date -f d) – Out to test PC
-$(Get-Date $date -f d) – Out to test Group
-$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) – Out to Group 1 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) – Out to Group 2 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 – approximately 25% of Dealers PC’s
+$(Get-Date $date -f d) - Out to test PC
+$(Get-Date $date -f d) - Out to test Group
+$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) - Out to Group 1 - approximately 25% of Dealers PC"s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 2 - approximately 25% of Dealers PC"s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 - approximately 25% of Dealers PC"s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 - approximately 25% of Dealers PC"s
 
 
 In the worst-case scenario, what services could be impacted?
@@ -1316,12 +1318,12 @@ $($global:kbs.title -join "`n")
 
 When is it scheduled to be implemented? (Start & End Dates/Times)
 
-$(Get-Date $date -f d) – Out to test PC
-$(Get-Date $date -f d) – Out to test Group
-$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) – Out to Group 1 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) – Out to Group 2 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 – approximately 25% of Dealers PC’s
-$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 – approximately 25% of Dealers PC’s
+$(Get-Date $date -f d) - Out to test PC
+$(Get-Date $date -f d) - Out to test Group
+$($date=$date.AddDays(6);iex $a;Get-Date $date -f d) - Out to Group 1 - approximately 25% of Dealers PC"s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 2 - approximately 25% of Dealers PC"s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 3 - approximately 25% of Dealers PC"s
+$($date=$date.AddDays(1);iex $a;Get-Date $date -f d) - Out to Group 4 - approximately 25% of Dealers PC"s
 
 
 In the worst-case scenario, what services could be impacted?
@@ -1660,7 +1662,7 @@ function Get-ServerUpdates {
   Set-Proxy 1
   Start-Sleep -Seconds 1
   $Last30Days = { $_.LastUpdated -gt (Get-Date).AddDays(-20) }
-  $o = @( Get-MSCatalogUpdate -Search "$(Get-Date –f yyyy-MM)" | Where-Object $Last30Days )
+  $o = @( Get-MSCatalogUpdate -Search "$(Get-Date -f yyyy-MM)" | Where-Object $Last30Days )
   $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2012 R2"  | Where-Object $Last30Days 
   $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2016"  | Where-Object $Last30Days 
   $o += Get-MSCatalogUpdate -Search "Cumulative Update for Windows Server 2019"  | Where-Object $Last30Days
@@ -1672,7 +1674,7 @@ function Get-ServerUpdates {
 }
 
 function New-MSPapp($a) {
-  $YearMonth = Get-Date –f yyyy-MM; $qtr = [math]::Ceiling((Get-Date).Month / 3) 
+  $YearMonth = Get-Date -f yyyy-MM; $qtr = [math]::Ceiling((Get-Date).Month / 3) 
   $path = "\\drscmsrv2\e$\SoftwarePackages\Monthly Patches\$YearMonth"
   $CMFolder = "DUB:\Application\_Security Update"
   Set-Location c:
@@ -1727,7 +1729,7 @@ If ($KBList){$KBList | % {Write-Host `n"$($_.DisplayName) found!"}}
 
 function New-MSUapp {
   # net use Y: \\drscmsrv2\e$ /USER:adm_58691 *
-  $YearMonth = Get-Date –f yyyy-MM; $qtr = [math]::Ceiling((Get-Date).Month / 3) 
+  $YearMonth = Get-Date -f yyyy-MM; $qtr = [math]::Ceiling((Get-Date).Month / 3) 
   $path = "\\drscmsrv2\e$\SoftwarePackages\Monthly Patches\$YearMonth"
   $CMFolder = "DUB:\Application\_Security Update"
 
@@ -1800,7 +1802,7 @@ function ExtractCabsFolder ($CabFolder = 'C:\Temp\updates') {
 }
 
 function Move-toCM($path = 'C:\Temp\updates\') {
-  $YearMonth = Get-Date –f yyyy-MM
+  $YearMonth = Get-Date -f yyyy-MM
   $qtr = [math]::Ceiling((Get-Date).Month / 3) 
   $pathCM = "\\drscmsrv2\e$\SoftwarePackages\Monthly Patches\$YearMonth"  #$msu = (Get-Item -Path $path\*.msu)
 
@@ -2752,7 +2754,7 @@ function Get-ExpiringUsers ($days) {
   $WarnDate = (get-date).adddays($days)
   $users = @()  # init array
   $users = Get-ADUser -filter { Enabled -eq $True -and PasswordNeverExpires -eq $False -and PasswordLastSet -gt 0 -and Name -notlike "*$*" } `
-    –Properties Name, DisplayName, msDS-UserPasswordExpiryTimeComputed, EmailAddress, UserPrincipalName `
+    -Properties Name, DisplayName, msDS-UserPasswordExpiryTimeComputed, EmailAddress, UserPrincipalName `
   | Select-Object -Property Name, Displayname, @{Name = "ExpiryDate"; Expression = { [datetime]::FromFileTime($_."msDS-UserPasswordExpiryTimeComputed") } }, EmailAddress, UserPrincipalName `
   | Where-Object { $_.ExpiryDate -gt (Get-Date) -and $_.ExpiryDate -le $WarnDate } `
   | Sort-Object ExpiryDate   #" $($users.count) users with a password expiring between $((Get-Date).ToShortDateString()) and $($WarnDate.ToShortDateString()) "
@@ -2950,7 +2952,7 @@ function Check-Logs ($pc, $LastHours) {
 function Get-UpdatesRemotly ($pc) {
   if ($pc -eq "") { $pc = $env:COMPUTERNAME }
   Try {
-    $session = [activator]::CreateInstance([type]::GetTypeFromProgID(“Microsoft.Update.Session", $pc))
+    $session = [activator]::CreateInstance([type]::GetTypeFromProgID("Microsoft.Update.Session", $pc))
     $searcher = $session.CreateUpdateSearcher()
     $totalupdates = $searcher.GetTotalHistoryCount()
     $all = $searcher.QueryHistory(0, $totalupdates)
@@ -3241,7 +3243,7 @@ function Get-LoggedUser1 {
     [string]$ComputerName	
   )
   @(Get-WmiObject -ComputerName $ComputerName -Namespace root\cimv2 -Class Win32_ComputerSystem)[0].UserName.Split('\')[1]
-  #@(Get-WmiObject –ComputerName $ComputerName –Class Win32_ComputerSystem)[0].Username.Split('\')[1]
+  #@(Get-WmiObject -ComputerName $ComputerName -Class Win32_ComputerSystem)[0].Username.Split('\')[1]
   #(Get-ChildItem "c:\Users" | Sort-Object LastWriteTime -Descending | Select-Object Name, LastWriteTime -first 2).Name
   #Get-WmiObject -Class Win32_ComputerSystem -Property UserName -ComputerName .
 }
@@ -3822,10 +3824,10 @@ function Get-MappedDrives($CN) {
 Function Get-DiskInfo { 
   param($computername = $env:COMPUTERNAME)
   Get-WMIObject Win32_logicaldisk -ComputerName $computername | Select-Object @{Name = 'ComputerName'; Ex = { $computername } }, `
-  @{Name = ‘Drive Letter‘; Expression = { $_.DeviceID } }, `
-  @{Name = ‘Drive Label’; Expression = { $_.VolumeName } }, `
-  @{Name = ‘Size(MB)’; Expression = { [int]($_.Size / 1MB) } }, `
-  @{Name = ‘FreeSpace%’; Expression = { [math]::Round($_.FreeSpace / $_.Size, 2) * 100 } }
+  @{Name = "Drive Letter"; Expression = { $_.DeviceID } }, `
+  @{Name = "Drive Label"; Expression = { $_.VolumeName } }, `
+  @{Name = "Size(MB)"; Expression = { [int]($_.Size / 1MB) } }, `
+  @{Name = "FreeSpace%"; Expression = { [math]::Round($_.FreeSpace / $_.Size, 2) * 100 } }
 }  #Get-DiskInfo -computername $WPFtextBox.Text | % {$WPFlistView.AddChild($_)}
 
 function LogonStatus ($computer = 'localhost') {
@@ -3868,7 +3870,7 @@ function Create-Task {
   $trigger = New-ScheduledTaskTrigger -Once -at $RTime 
   $Settings = New-ScheduledTaskSettingsSet -Compatibility Win8 
   $user = New-ScheduledTaskPrincipal -GroupId "Users"
-  $principal = New-ScheduledTaskPrincipal -UserId (Get-CimInstance –ClassName Win32_ComputerSystem | Select-Object -expand UserName)
+  $principal = New-ScheduledTaskPrincipal -UserId (Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -expand UserName)
   [void](Register-ScheduledTask -Action $action -Trigger $trigger -TaskName $taskname -Description "Shutdown task (interactive)" -Settings $Settings -Principal $principal -Force) 
 }
 
@@ -3880,8 +3882,8 @@ Function old_schTask {
 }
 
 function Loge($text) {
-  New-EventLog –LogName Application –Source “MBmod Script" -ErrorAction SilentlyContinue 
-  Write-EventLog –LogName Application –Source “MBmod Script" –EntryType Information –EventID 1 –Message $text
+  New-EventLog -LogName Application -Source "MBmod Script" -ErrorAction SilentlyContinue 
+  Write-EventLog -LogName Application -Source "MBmod Script" -EntryType Information -EventID 1 -Message $text
 }
 
 Function pause1 ($message) {
@@ -4498,10 +4500,10 @@ function SCCM-ForceUpd($pc) {
 
 function SCCM-Refresh($pc) {
   ([wmiclass]"\\$pc\root\ccm:SMS_Client").TriggerSchedule("{00000000-0000-0000-0000-000000000001}")
-  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000002}"
-  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000003}"
-  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000021}"
-  # Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule “{00000000-0000-0000-0000-000000000102}"
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule â€ś{00000000-0000-0000-0000-000000000002}"
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule â€ś{00000000-0000-0000-0000-000000000003}"
+  Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule â€ś{00000000-0000-0000-0000-000000000021}"
+  # Invoke-WMIMethod -ComputerName $pc -Namespace root\ccm -Class SMS_CLIENT -Name TriggerSchedule â€ś{00000000-0000-0000-0000-000000000102}"
   Invoke-CimMethod -Namespace 'root\ccm' -ClassName 'sms_client' -MethodName TriggerSchedule -Arguments @{sScheduleID = "{00000000-0000-0000-0000-000000000002}" }
 }
 
@@ -4840,7 +4842,7 @@ function Get-LastLoggedNonAdmin($pc) {
   $opt = New-CimSessionOption -Protocol DCOM
   $s = New-CimSession -Computername $PC -SessionOption $opt -ErrorAction Stop
 
-  $res = Get-CimInstance –ClassName Win32_UserProfile -Filter "Special = 'False' AND LastUseTime IS NOT NULL" -CimSession $s |
+  $res = Get-CimInstance -ClassName Win32_UserProfile -Filter "Special = 'False' AND LastUseTime IS NOT NULL" -CimSession $s |
   Sort-Object -Property LastUseTime -Descending -Unique |
   Select-Object LocalPath, LastUseTime, @{N = 'User'; E = { $_.LocalPath | ForEach-Object { $_.split('\')[-1] } } } -First 20  #| % {$_.split('\')[-1]} 
   #$res | ? { $_.user -notlike  "dsk_*" -and $_.user -notin $AdmDsk }
@@ -5355,7 +5357,7 @@ Description: Get the coordinates of all visible windows and save them into the
 
 .EXAMPLE
 Set-Window -Id $PID -Passthru | Format-Table
-​‌‍
+â€‹â€Śâ€Ť
   Id ProcessName Size     TopLeft BottomRight
   -- ----------- ----     ------- -----------
 7840 pwsh        1024,638 0,0     1024,638
@@ -5579,7 +5581,7 @@ List a Cm Group
 (Get-CMCollectionMember -CollectionName 'Group 2').name | % { [PSCustomObject]@{PC=$_; Desc=(Get-ADComputer $_ -Properties description).description}  }
 
 Add computer to Collection
-(Get-CMCollectionMember -CollectionName 'Office 2016 group 5').name | % { Add-CMDeviceCollectionDirectMembershipRule -CollectionName “Group 2" -ResourceID (Get-CMDevice -Name $_).ResourceID }
+(Get-CMCollectionMember -CollectionName 'Office 2016 group 5').name | % { Add-CMDeviceCollectionDirectMembershipRule -CollectionName â€śGroup 2" -ResourceID (Get-CMDevice -Name $_).ResourceID }
 
 'ss s s    s s ' -replace '\s+', ' '
 
