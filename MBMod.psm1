@@ -4,7 +4,6 @@
  Import-Module ".\MBMod.psm1" -Force -WarningAction SilentlyContinue
 #> 
 
-
 function Get-WinUpdProblem{
  adinfo
  $l = Ping-DealersPCs
@@ -337,35 +336,6 @@ $_Press_Enter
 #::
 }
 
-function Skip_TPM_check_on_upgeade_v2 {
-@(set "0=%~f0"^)#) & powershell -nop -c iex([io.file]::ReadAllText($env:0)) & exit/b
-#:: double-click to run or just copy-paste into powershell - it's a standalone hybrid script
-#:: v2 of the toggle script comes to the aid of outliers for whom v1 did not work due to various reasons (broken/blocked/slow wmi)
-#:: uses IFEO instead to attach to the same Virtual Disk Service Loader process running during setup, then launches a cmd erase 
-#:: of appraiserres.dll - but it must also do some ping-pong renaming of the exe in system32\11 - great implementation nonetheless 
-#:: (for simplicity did not use powershell invoking CreateProcess and DebugActiveProcessStop to overcome IFEO constrains)
-#:: in v2 the cmd window will briefly flash while running diskmgmt - so it is not "better" per-se. just more compatible / reactive
-#:: you probably don't need to have it installed at all times - just when doing feature updates or manual setup within windows
-#:: hence the on off toggle just by running the script again
-
-$_Paste_in_Powershell = {
-  $N = 'Skip TPM Check on Dynamic Update'
-  $0 = sp 'HKLM:\SYSTEM\Setup\MoSetup' 'AllowUpgradesWithUnsupportedTPMOrCPU' 1 -type dword -force -ea 0
-  $B = gwmi -Class __FilterToConsumerBinding -Namespace 'root\subscription' -Filter "Filter = ""__eventfilter.name='$N'""" -ea 0
-  $C = gwmi -Class CommandLineEventConsumer -Namespace 'root\subscription' -Filter "Name='$N'" -ea 0
-  $F = gwmi -Class __EventFilter -NameSpace 'root\subscription' -Filter "Name='$N'" -ea 0
-  if ($B) { $B | rwmi } ; if ($C) { $C | rwmi } ; if ($F) { $F | rwmi }
-  $C = "cmd /q $N (c) AveYo, 2021 /d/x/r>nul (erase /f/s/q %systemdrive%\`$windows.~bt\appraiserres.dll"
-  $C+= '&md 11&cd 11&ren vd.exe vdsldr.exe&robocopy "../" "./" "vdsldr.exe"&ren vdsldr.exe vd.exe&start vd -Embedding)&rem;'
-  $K = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\vdsldr.exe'
-  if (test-path $K) {ri $K -force -ea 0; write-host -fore 0xf -back 0xd "`n $N [REMOVED] run again to install "; timeout /t 5}
-  else {$0=ni $K; sp $K Debugger $C -force; write-host -fore 0xf -back 0x2 "`n $N [INSTALLED] run again to remove ";timeout /t 5}
-} ; start -verb runas powershell -args "-nop -c & {`n`n$($_Paste_in_Powershell-replace'"','\"')}"
-$_Press_Enter
-#::
-
-}
-
 function Get-OfficeLogin {
  $PCs = ((Get-ADComputer -Filter { OperatingSystem -NotLike "*server*" } -prop description, location) | Where-Object { $_.name -ne 'DRSVCENTRE' }) 
  $out = foreach ($pc in $pcs.name){
@@ -472,7 +442,8 @@ function Pack-Java {
   param ( [string]$Location = "\\drscmsrv2\e$\SoftwarePackages\Java\", [string]$SCCM = "\\drscmsrv2\e$\SoftwarePackages\Java" )
     
   # Locate the latest Java installer
-  $Path = (Get-ChildItem -Path $Location -Filter "jre*.exe" -Recurse | Sort-Object LastAccessTime | Select-Object -Last 1).FullName
+  C:
+  $Path = (Get-ChildItem -Path $Location -Filter "jre*.exe" | Sort-Object LastAccessTime | Select-Object -Last 1).FullName
   if (-not $Path) { Write-Error "No Java installer found in $Location"; return }
 
   $File = Get-Item $Path
@@ -492,12 +463,10 @@ function Pack-Java {
     Move-Item -Path $Path -Destination (Join-Path -Path $DestinationFolder -ChildPath $File.Name)
   }
 
-  # Load SCCM Module and Map Drive  # CM-MapDrive
   CM-LoadModule
-
   $JavaVer3d = (($FileVer -split '\.')[2]).Substring(0, 3)
-  # $javaGUID = "{77924AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"  # {71124AE4-039E-4CA4-87B4-2F32180461F0}  8.0.4610.11 32b
-    $javaGUID = "{71024AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"  # {71124AE4-039E-4CA4-87B4-2F64180461F0}  8.0.4610.11 64b
+  $javaGUIDx32 = "{71124AE4-039E-4CA4-87B4-2F32180$($JavaVer3d)F0}"  # {71124AE4-039E-4CA4-87B4-2F32180461F0}  8.0.4610.11 32b
+  $javaGUIDx64 = "{71124AE4-039E-4CA4-87B4-2F64180$($JavaVer3d)F0}"  # {71124AE4-039E-4CA4-87B4-2F64180461F0}  8.0.4610.11 64b
 
   # Check if deployment already exists
   if (-not (Get-CMDeploymentType -ApplicationName "Java" -DeploymentTypeName "Java $FileVer")) {
@@ -517,14 +486,15 @@ function Pack-Java {
       DPGroupName          = "AllDP"
       EstimatedRuntimeMins = 10
     }
+    $javaGUID = if ($is64) {$javaGUIDx64} else {$javaGUIDx32}
     CM-NewApp @NewAppParams -DetectionClause ( New-CMDetectionClauseWindowsInstaller -ProductCode $javaGUID -Existence )
     CM-Deploy -Apps "Java $FileVer" -Collection "Test_MB" -Now
     CM-LoadModule 
-    ## dont Invoke-CMClientNotification -ActionType ClientNotificationRequestMachinePolicyNow -CollectionName "Test_MB"
   }
   else {
     Write-Output "Deployment type for Java $FileVer already exists."
   }
+  C:
 }
 
 function Pack-Java_old {
@@ -672,7 +642,7 @@ function Pack-Calypso {
   $path = Join-Path $fpath $fname   #$Ver = Split-Path $path -Leaf
   $AppName = "Calypso $fname"       #$Ver -match "\d*TR\d\d.*"; $tr = $Matches[0]; 
   Set-Location c:
-  $DetectionFile = Get-ChildItem "$path\client\TR*.txt" -Name
+  $DetectionFile = Get-ChildItem "$path\client*\TR*.txt" -Name
   "$path `nDetectionFile is $DetectionFile - Preparing package - $appname - $fname - $TRver"
   pause
   Import-Module (Join-Path $(Split-Path $env:SMS_ADMIN_UI_PATH) ConfigurationManager.psd1); Set-Location "DUB:\"
@@ -966,7 +936,7 @@ start-sleep -Seconds 5
 function SendKeys($Name, $Keys) {
   # {ENTER} {TAB} ^Ctrl +Shift %Alt https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/sendkeys-statement
   $wsh = New-Object -Com wscript.shell;
-  $ids = (List-Windows | Where-Object { $_.MainWindowTitle -like "*$name*" }).id
+  $ids = (List-Windows -full | Where-Object { $_.MainWindowTitle -like "*$name*" }).id
   $wsh.AppActivate("$name");
   Start-Sleep -m 300;
   $wsh.SendKeys("$keys")
@@ -1075,7 +1045,7 @@ function Run-r {
   $rp = If ($Cred) { Run-Remote $Pc $rCmd -Cred $Cred } else { Run-Remote $Pc $rCmd }
   while (Get-Process -ComputerName $Pc -id $rp.ProcessId -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 200 }
   $c = Get-Content "\\$pc\$($logFile -replace ':','$')" -Raw
-  $out = ((($c -split '[\r\n]+(?=Transcript started)')[1] -split '\*\*\*\*+')[0] -split "`n`r" | Select-Object -Skip 1 | Out-String ).Trim()
+  $out = (($c -split '[\r\n]+(?=Transcript started)')[1] -split '\*\*\*\*+')[0] -split "`n`r" 
   return $out.Trim()
 }
 
@@ -1220,14 +1190,17 @@ function Init {
   $global:DesktopPath = [Environment]::GetFolderPath("Desktop")
   $global:PatternSID  = 'S-1-5-21-\d+-\d+\-\d+\-\d+$'
 
-  $global:upath = "$ModuleDir\MBMod\0.3\users.xlsx"
-  $global:cpath = "$ModuleDir\MBMod\0.3\comps.xlsx"
-
-  #"Mß v1.5"
+  $global:upath = "$ScriptPath\users.xlsx"
+  $global:cpath = "$ScriptPath\comps.xlsx"
+  $global:logp = "Z:\DRS Support\Finish Build\DRSlog.txt"
+  #"Mß v1.6"
   #Show-Init
 }
 
 function Show-Init {
+ Write-Host "ComputerName:" $env:COMPUTERNAME
+ Write-Host "User        :" $env:USERNAME
+ Write-Host "Desktop     :" $global:DesktopPath
  Write-Host "ModuleFile  :" $global:ModuleFile
  Write-Host "ModulePath  :" $global:ModulePath
  Write-Host "ModulePath2 :" $global:ModulePath2
@@ -1237,13 +1210,41 @@ function Show-Init {
  Write-Host "ScriptPath1 :" $global:ScriptPath1
  Write-Host "upath       :" $global:upath
  Write-Host "cpath       :" $global:cpath
+ Write-Host "logp        :" $global:logp
  Write-Host "PSScriptRoot:" $global:PSScriptRoot
- Write-Host "psise       :" $global:psise
+ Write-Host "psise       :" $global:psISE.CurrentFile.FullPath
+}
+
+function S-Init {
+  'ComputerName: ' + $env:COMPUTERNAME
+  'User        : ' + $env:USERNAME
+  'Desktop     : ' + $global:DesktopPath
+  'ModuleFile  : ' + $global:ModuleFile
+  'ModulePath  : ' + $global:ModulePath
+  'ModulePath2 : ' + $global:ModulePath2
+  'ModuleDir   : ' + $global:ModuleDir
+  'ScriptFile  : ' + $global:ScriptFile
+  'ScriptPath  : ' + $global:ScriptPath
+  'ScriptPath1 : ' + $global:ScriptPath1
+  'upath       : ' + $global:upath
+  'cpath       : ' + $global:cpath
+  'logp        : ' + $global:logp
+  'PSScriptRoot: ' + $global:PSScriptRoot
+  'psise       : ' + $global:psISE.CurrentFile.FullPath
+}
+
+function lg($txt) {
+ if ($txt) { $txt | Out-File $logp -Append }
+  else { "`n$(Get-Date)`n$(S-Init | Out-String)" | Out-File $logp -Append }
+}
+
+function check-lock($file){
+ try { [IO.File]::OpenWrite($file).close(); $true }
+  catch { $false }
 }
 
 function Main {
-  $global:ScriptPath = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
-  Init
+  Init;lg
 }
 
 Main
@@ -1380,11 +1381,12 @@ function ImportMe {
   Import-Module "$ModulePath\MBMod.psm1" -WA SilentlyContinue -Force -Global
 }
 
-function List-Windows { # DUPLICATE FUNCTION
-  Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object ProcessName, MainWindowTitle
+function List-Windows ([switch]$full) { 
+  if ($full) { Get-Process | Where-Object { $_.MainWindowTitle } } else {
+  Get-Process | Where-Object { $_.MainWindowTitle } | Select-Object Id, ProcessName, MainWindowTitle }
 }
 
-function Test-BCS {
+function Test-BCS($outpath) {
   $OutFile = "Central Park Checks $(get-date -Format 'yyyy-MM-dd HH-mm').xlsx" 
   $OutPath = 'G:\Daily Checks\Completed Central Park Checks'
 
@@ -1420,7 +1422,7 @@ function Test-BCS {
   $global:BCS = $out
 
   #$c1 = New-ExcelChartDefinition -YRange "PC" -XRange "Pass" -Title "Total"  -NoLegend -Height 225 -Row 9  -Column 15
-  $o = Export-Excel -PassThru -NoNumberConversion Name -Path $path -InputObject ($out | Select-Object PC, Pass) -TableName 'Summary' -WorksheetName 'Summary' -FreezeTopRow -BoldTopRow -AutoSize -CellStyleSB { param($workSheet)  $WorkSheet.Cells.Style.HorizontalAlignment = "Left" } #`-Barchart -ExcelChartDefinition $c1
+  $o = Export-Excel -PassThru -TableStyle Medium7 -NoNumberConversion Name -Path $path -InputObject ($out | Select-Object PC, Pass) -TableName 'Summary' -WorksheetName 'Summary' -FreezeTopRow -BoldTopRow -AutoSize -CellStyleSB { param($workSheet)  $WorkSheet.Cells.Style.HorizontalAlignment = "Left" } #`-Barchart -ExcelChartDefinition $c1
   Add-ConditionalFormatting -Worksheet $o.Summary -Range "B2:B52" -RuleType ContainsText -ConditionValue "TRUE" -ForegroundColor Green -BackgroundColor LightGreen
   Add-ConditionalFormatting -Worksheet $o.Summary -Range "B2:B52" -RuleType ContainsText -ConditionValue "FALSE" -ForegroundColor Red -BackgroundColor LightPink
   $o.Summary.Cells["D1"].Value = "$(($out.pass -eq $true).count)"
@@ -1871,7 +1873,7 @@ function decom($pc) {
 function Wsusinfo($server = 'drsopsmgr3') {
   $w = Get-WsusServer -Name drsopsmgr3 -PortNumber 8530
   $global:Wsus_comp = New-Object System.Collections.Generic.List[System.Object]
-  $Wsus_comp = Get-WsusComputer -UpdateServer $w | Where-Object { $_.ComputerRole -eq 'Workstation' }
+  $global:wsus_comp = Get-WsusComputer -UpdateServer $w | Where-Object { $_.ComputerRole -eq 'Workstation' }
   $global:WsusList = ($Wsus_comp.FullDomainName -replace '.dealers.aib.pri').ToUpper()
 }
 
@@ -2120,27 +2122,55 @@ function Remove-AllUsersProfile($PC) {
 }
 
 
+function Test-FileLock {
+  param (
+    [parameter(Mandatory=$true)][string]$Path
+  )
+
+  $oFile = New-Object System.IO.FileInfo $Path
+
+  if ((Test-Path -Path $Path) -eq $false) {
+    return $false
+  }
+
+  try {
+    $oStream = $oFile.Open([System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+
+    if ($oStream) {
+      $oStream.Close()
+    }
+    return $false
+  } catch {
+    # file is locked by a process.
+    return $true
+  }
+}
 
 function ADinfo {
-  #Write-Debug "Updating AD from servers"
   Init
   If (-not(Get-module ImportExcel)) { Import-Module "$ModuleDir\ImportExcel\7.4.1\ImportExcel.psd1" -Global -WA SilentlyContinue } 
   $null = Get-DealersUsers 
   $null = Get-DealersPCs
+  ri $upath,$cpath
   Export-Xlsx $ADu $upath 
   Export-Xlsx $ADc $cpath
 }
 
 function Get-ADinfo {
   if (Test-Path $upath) {
-    $time = Get-ItemPropertyValue $upath -Name LastWriteTime
-    if (((get-date) - $time).TotalMinutes -lt 10) {
-      "-- Loaded from file --"; $global:ADu = Import-Excel $upath; $global:ADc = Import-Excel $cpath
+   $bad = $false
+   try {[void](Import-Excel $upath -WA Stop -EA Stop 3>$null)} catch {$bad = $true}
+   try {[void](Import-Excel $cpath -WA Stop -EA Stop 3>$null)} catch {$bad = $true}
+   if ($bad) { $upath,$cpath | % { Remove-Item $_ -Verbose }; ADinfo  }
+   $time = Get-ItemPropertyValue $upath -Name LastWriteTime
+   if (((get-date) - $time).TotalMinutes -lt 10) {
+     "-- Loaded from file --"; 
+     $global:ADu = Import-Excel $upath
+     $global:ADc = Import-Excel $cpath     
     }
     else { "-- Loaded from AD --"; ADinfo }
   }
   else { "-- Loaded from AD --"; ADinfo } 
-
 }
 
 function Get-DealersUsers {
@@ -2168,18 +2198,15 @@ function Get-DealersPCs {
 
   $global:ADc = New-Object System.Collections.Generic.List[System.Object]
   $TempC = New-Object System.Collections.Generic.List[System.Object]
-  $TempC.AddRange( ((Get-ADComputer -Filter { OperatingSystem -NotLike "*server*" } -prop description, location) | Where-Object { $_.name -ne 'DRSVCENTRE' }) )
+  $TempC.AddRange( ((Get-ADComputer -Filter * -prop description, location) | Where-Object { $_.name -ne 'DRSVCENTRE' }) ) # -f { OperatingSystem -NotLike "*server*" } 
   $ex = 'PropertyNames', 'AddedProperties', 'RemovedProperties', 'ModifiedProperties', 'PropertyCount'
   $ADc.AddRange( ($TempC | Select-Object * -ExcludeProperty $ex) )
   Remove-Variable TempC
 }
 
 function Ping-DealersPCs {
+  if (-not (Test-Path Variable:adc)) { ADinfo }
   APingN($adc.name)
-}
-
-Function Set-ConsoleWindowTitle($Title) {
-  $host.ui.RawUI.WindowTitle = $Title
 }
 
 function Set-Console($title, $width, $height) {
@@ -2193,7 +2220,6 @@ function Set-WinTitle($p, $text) {
     Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-  
 public static class Win32Api
 {
     [DllImport("User32.dll", EntryPoint = "SetWindowText")]
@@ -2550,7 +2576,7 @@ function Check-PC($pc) {
     '5' { "`n$pc is a member of:"; Get-PCgroup $pc; '' }
     '6' { WOL $pc; New-PingWindow($pc) }
     '7' { New-PingWindow($pc) }
-    '8' { Ask-Restart }
+    '8' { Ask-Restart $pc}
     '9' { compmgmt.msc -a /computer=$pc }
     '0' { "back to search" }
    '11' { Invoke-Item "$pathDesktop" }
@@ -2586,8 +2612,8 @@ function Ask-Restart($pc){
  if ((isLogged $pc).user) {
   Write-Host "User is logged to this pc, are you sure to restart ? if no, close the console" 
   pause
+  }
   Restart-Computer $pc -Force; New-PingWindow($pc)
- }
 }
 
 function Mstsc-Menu($pc) {
@@ -2762,6 +2788,9 @@ function Get-LoggedUsers {
     }
     if ($files.Count -gt 5) {
       $zip = Get-ChildItem $lpath | Sort-Object LastWriteTime -Descending 
+      $zip | % { $f=$_; try {[void](Import-Excel $_ -WA Stop -EA Stop 3>$null)} catch {$bad+=,$f}}
+      $zip = $zip | ? { $_ -notin $bad }
+      if ($bad) { $bad | % { Remove-Item $_ -Verbose};rv bad }
       $temp = New-Object System.Collections.Generic.List[System.Object]
       $zip | ForEach-Object { $temp.AddRange( (Import-Excel $_) ) }
       $temp = $temp | Where-Object { $_.'LOGON TIME' } | sort dt | sort -Unique Computer 
@@ -5343,6 +5372,9 @@ Description: Display the coordinates of the window for the current
       ValueFromPipelineByPropertyName = $True, ParameterSetName = 'Name')]
     [string]$ProcessName = '*',
     [parameter(Mandatory = $True,
+      ValueFromPipeline = $False, ParameterSetName = 'Title')]
+    [string]$Title = '*',
+    [parameter(Mandatory = $True,
       ValueFromPipeline = $False, ParameterSetName = 'Id')]
     [int]$Id,
     [int]$X,
@@ -5390,6 +5422,9 @@ Description: Display the coordinates of the window for the current
     If ( $PSBoundParameters.ContainsKey('Id') ) {
       $Processes = Get-Process -Id $Id -ErrorAction SilentlyContinue
     }
+    elseIf ( $PSBoundParameters.ContainsKey('Title') ) {
+      $Processes = Get-Process | Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle -like "$Title" }
+    }
     else {
       $Processes = Get-Process -Name "$ProcessName" -ErrorAction SilentlyContinue
     }
@@ -5404,21 +5439,12 @@ Description: Display the coordinates of the window for the current
         Write-Verbose "$($_.ProcessName) `(Id=$($_.Id), Handle=$Handle`)"
         if ( $Handle -eq [System.IntPtr]::Zero ) { return }
         $Return = [Window]::GetWindowRect($Handle, [ref]$Rectangle)
-        If (-NOT $PSBoundParameters.ContainsKey('X')) {
-          $X = $Rectangle.Left            
-        }
-        If (-NOT $PSBoundParameters.ContainsKey('Y')) {
-          $Y = $Rectangle.Top
-        }
-        If (-NOT $PSBoundParameters.ContainsKey('Width')) {
-          $Width = $Rectangle.Right - $Rectangle.Left
-        }
-        If (-NOT $PSBoundParameters.ContainsKey('Height')) {
-          $Height = $Rectangle.Bottom - $Rectangle.Top
-        }
-        If ( $Return ) {
-          $Return = [Window]::MoveWindow($Handle, $x, $y, $Width, $Height, $True)
-        }
+        If (-NOT $PSBoundParameters.ContainsKey('X')) { $X = $Rectangle.Left }
+        If (-NOT $PSBoundParameters.ContainsKey('Y')) { $Y = $Rectangle.Top  }
+        If (-NOT $PSBoundParameters.ContainsKey('Width')) {  $Width = $Rectangle.Right - $Rectangle.Left  }
+        If (-NOT $PSBoundParameters.ContainsKey('Height')) { $Height = $Rectangle.Bottom - $Rectangle.Top }
+        If ( $Return ) { $Return = [Window]::MoveWindow($Handle, $x, $y, $Width, $Height, $True) }
+        if ( $Title ) { $zmientytul = 1 }
         If ( $PSBoundParameters['Passthru'] ) {
           $Rectangle = New-Object RECT
           $Return = [Window]::GetWindowRect($Handle, [ref]$Rectangle)
@@ -5428,11 +5454,12 @@ Description: Display the coordinates of the window for the current
             $Size = New-Object System.Management.Automation.Host.Size        -ArgumentList $Width, $Height
             $TopLeft = New-Object System.Management.Automation.Host.Coordinates -ArgumentList $Rectangle.Left , $Rectangle.Top
             $BottomRight = New-Object System.Management.Automation.Host.Coordinates -ArgumentList $Rectangle.Right, $Rectangle.Bottom
+            $isMin = $false
             If ($Rectangle.Top -lt 0 -AND 
               $Rectangle.Bottom -lt 0 -AND
               $Rectangle.Left -lt 0 -AND
-              $Rectangle.Right -lt 0) {
-              Write-Warning "$($_.ProcessName) `($($_.Id)`) is minimized! Coordinates will not be accurate."
+              $Rectangle.Right -lt 0) { $isMin = $true
+              #Write-Warning "$($_.ProcessName) `($($_.Id)`) is minimized! Coordinates will not be accurate."
             }
             $Object = [PSCustomObject]@{
               Id          = $_.Id
@@ -5440,6 +5467,8 @@ Description: Display the coordinates of the window for the current
               Size        = $Size
               TopLeft     = $TopLeft
               BottomRight = $BottomRight
+              isMin       = $isMin
+              Title       = $_.MainWindowTitle
             }
             $Object
           }
