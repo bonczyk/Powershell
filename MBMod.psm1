@@ -1359,23 +1359,23 @@ function Change-Password {
 
 function Test-Modules2 {
   Init
-  $path = "$ModuleDir"  #"$ScriptPath\modules"
-  #if ($ScriptPath -eq $ModulePath2) {$path = Split-Path (Split-Path $ScriptPath)}
-  $modUNC = @{ ImportExcel = "$path\ImportExcel\7.4.1\ImportExcel.psd1"
-    MSCatalog              = "$path\MSCatalog\MSCatalog.psd1"
+  $newest = (gci "$ModuleDir\ImportExcel\*" | sort LastWriteTime -Descending)[0].FullName
+  $modUNC = @{ 
+   ImportExcel = "$newest\ImportExcel.psd1"
+   MSCatalog   = "$ModuleDir\MSCatalog\MSCatalog.psd1"
   }
   $ModUNC.keys | ForEach-Object { If (-not(Get-module $_)) { Import-Module $($ModUNC[$_]) -Global -WA SilentlyContinue } }
 }
 
 function Test-Modules {
   Init
-  Import-Module "$ModuleDir\ImportExcel\7.4.1\ImportExcel.psd1" -Global -WA SilentlyContinue
+  $newest = (gci "$ModuleDir\ImportExcel\*" | sort LastWriteTime -Descending)[0].FullName
+  Import-Module "$newest\ImportExcel.psd1" -Global -WA SilentlyContinue
   # Import-Module "$ModuleDir\MSCatalog\MSCatalog.psd1" -Global -WA SilentlyContinue
 }
 
 function Me-Import {
   Import-Module "$ModulePath\MBMod.psm1" -WA SilentlyContinue -Force -Global
-  #Import-Module "$ScriptPath\modules\MBMod\0.3\MBMod.psm1" -Force -Global -WarningAction SilentlyContinue
 }
 
 function ImportMe {
