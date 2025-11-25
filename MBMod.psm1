@@ -4,6 +4,15 @@
  Import-Module ".\MBMod.psm1" -Force -WarningAction SilentlyContinue
 #> 
 
+function GetFreeLetter {
+ gci function:[d-z]: -n | ?{ !(test-path $_) } 
+}
+
+function PraseNetUse($netuse) {
+ $netuse -like '* \\*' | % {  $Status,$Local,$Remote,$Null = $_ -split ' +',4
+ [PSCustomObject]@{ Status = $Status; Local  = $Local; Remote = $Remote }}
+}
+
 function Get-WinUpdProblem{
  adinfo
  $l = Ping-DealersPCs
@@ -430,6 +439,7 @@ function Get-Time($pc,$cred) {
 }
 
 function Pack-CU {
+My-Proxy 1
   Save-NewUpdate
   ExtractCabsFolder
   Move-toCM
@@ -1094,7 +1104,7 @@ function Run-Remote {
   } catch { return $false }
 }
 
-function PraseNetUse($netuse = (net use)) {
+function Prase-NetUse($netuse = (net use)) {
   $netuse -like '* \\*' | ForEach-Object { $Status, $Local, $Remote, $Null = $_ -split ' +', 4
     [PSCustomObject]@{
       Status = $Status
@@ -1193,8 +1203,7 @@ function Init {
   $global:upath = "$ScriptPath\users.xlsx"
   $global:cpath = "$ScriptPath\comps.xlsx"
   $global:logp = "Z:\DRS Support\Finish Build\DRSlog.txt"
-  #"MĂź v1.6"
-  #Show-Init
+  #Mß v0.6"
 }
 
 function Show-Init {
@@ -1234,11 +1243,25 @@ function S-Init {
 }
 
 function lg($txt) {
- if (Test-Path $logp) {
-  if ($txt) { $txt | Out-File $logp -Append }
-   else { "`n$(Get-Date)`n$(S-Init | Out-String)" | Out-File $logp -Append }
+ if ('Z:' -in (Prase-NetUse).local) {
+  if (Test-Path $logp -EA SilentlyContinue) {
+   if ($txt) { $txt | Out-File $logp -Append }
+    else { "`n$(Get-Date)`n$(S-Init | Out-String)" | Out-File $logp -Append }
+  }
  }
 }
+ <#
+
+ Out-File : Cannot find drive. A drive with the name 'Z' does not exist.
+At C:\H\MB\PS\modules\MBMod\0.3\MBMod.psm1:1237 char:52
++ ...  { "`n$(Get-Date)`n$(S-Init | Out-String)" | Out-File $logp -Append }
++                                                  ~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (Z:String) [Out-File], DriveNotFoundException
+    + FullyQualifiedErrorId : DriveNotFound,Microsoft.PowerShell.Commands.OutFileCommand
+
+
+ #>
+
 
 function check-lock($file){
  try { [IO.File]::OpenWrite($file).close(); $true }
@@ -1367,11 +1390,11 @@ function Test-Modules2 {
   $ModUNC.keys | ForEach-Object { If (-not(Get-module $_)) { Import-Module $($ModUNC[$_]) -Global -WA SilentlyContinue } }
 }
 
-function Test-Modules {
+function Test-Modules([switch]$MSCatalog){
   Init
   $newest = (gci "$ModuleDir\ImportExcel\*" | sort LastWriteTime -Descending)[0].FullName
   Import-Module "$newest\ImportExcel.psd1" -Global -WA SilentlyContinue
-  # Import-Module "$ModuleDir\MSCatalog\MSCatalog.psd1" -Global -WA SilentlyContinue
+  if ($MSCatalog) { Import-Module "$ModuleDir\MSCatalog\MSCatalog.psd1" -Global -WA SilentlyContinue}
 }
 
 function Me-Import {
@@ -1396,7 +1419,7 @@ function Test-BCS($outpath) {
   $path = Join-Path $OutPath $OutFile
   "Output to excel file $path"
 
-  $inCP = (Get-ADComputer -Filter * -SearchBase 'OU=DRS Central Park,OU=DRS Win 10 PCs,DC=dealers,DC=aib,DC=pri' -Properties description, location) + (Get-ADComputer -Filter * -SearchBase 'OU=DRS Central Park Win 11 PC`s,OU=DRS Win 11 PCs,DC=dealers,DC=aib,DC=pri' -Properties description, location)
+  $inCP = (Get-ADComputer -Filter * -SearchBase 'OU=DRS Central Park Win 11 PC`s,OU=DRS Win 11 PCs,DC=dealers,DC=aib,DC=pri' -Properties description, location)
   $all = Get-ADComputer -Filter { OperatingSystem -NotLike "*server*" } -Properties description, location
   $list = $inCP.name  
 
@@ -1646,20 +1669,17 @@ $files | % { $hn=($_.name -split ' ')[0]; Import-Csv $_ -Header KB,Desc -Delimit
 function Get-DesktopUpdates {
   # Save-MSCatalogUpdate
   Test-Modules
-  Set-Proxy 1
   Start-Sleep -Seconds 2
   $Last30Days = { $_.LastUpdated -gt (Get-Date).AddDays(-20) }
   $d = @(Get-MSCatalogUpdate -Search "Cumulative*Windows 10*22H2*x64" -Strict -ExcludePreview | Where-Object { $_.Title -notlike "*Dynamic*" -and $_.Title -notlike "*4.8.1*" } | Where-Object $Last30Days)
   #$d += Get-MSCatalogUpdate -Search "Update*2016*32" -Strict | ? $Last30Days
   #$d += Get-MSCatalogUpdate -Search "Update*2016*64" -Strict | ? $Last30Days
   $d | Sort-Object Title -Unique | Tee-Object -Variable global:kbs 
-  Set-Proxy 0
 }
 
 function Get-ServerUpdates {
   #Win 2019 Test - drs2019test1 and drs2019testdfs1 - Win 2016 Test - drs2016test1 - Win 2012 Test - omg-kms-deal1 
   Test-Modules
-  Set-Proxy 1
   Start-Sleep -Seconds 1
   $Last30Days = { $_.LastUpdated -gt (Get-Date).AddDays(-20) }
   $o = @( Get-MSCatalogUpdate -Search "$(Get-Date -f yyyy-MM)" | Where-Object $Last30Days )
@@ -1670,7 +1690,6 @@ function Get-ServerUpdates {
   #$o += Get-MSCatalogUpdate -Search "SQL" -AllPages  | ? $Last30Days
   $o += Get-MSCatalogUpdate -Search "Servicing Stack Update for Windows Server*x64"  -SortBy Products | Where-Object $Last30Days
   $o | Where-Object { $_.Products -in @("Windows Server 2012 R2", "Windows Server 2016", "Windows Server 2019") } | Sort-Object Title -Unique | Sort-Object Products | Tee-Object -Variable global:SrvKB
-  Set-Proxy 0
 }
 
 function New-MSPapp($a) {
@@ -1773,11 +1792,8 @@ function New-MSUapp {
 
 function Save-NewUpdate($path = "C:\Temp\updates") {
   if (-not (Test-Path $path)) { mkdir $path }
-  Set-Proxy 1
   $u = (Get-DesktopUpdates)
-  Set-Proxy 1
   $u | ForEach-Object { Save-MSCatalogUpdate $_ $path -AcceptMultiFileUpdates -UseBits -ErrorAction SilentlyContinue } 
-  Set-Proxy 0
 }
 
 function ExtractCabsFolder ($CabFolder = 'C:\Temp\updates') {
@@ -1979,9 +1995,7 @@ function CombineObj ($ObjArray) {
   $out
 }
 
-
-
-function My-Proxy($val) {
+function My-Proxy($val=1) {
   Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyServer -Value 'webcorp.prd.aib.pri:8082'
   Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -name ProxyEnable -value $val
 }
@@ -2547,6 +2561,7 @@ function Check-PC($pc) {
     "Online      : $($on.Address)" 
     "Up Time     : $uptime"
     "Logged User : $((isLogged $pc).user -join ',') - $($LNow.USERNAME -join ',') - DN: $($LNow.DisplayName -join ',') "
+    (logged-user $pc | select -ExcludeProperty Computer,Description,dt -Property *| ft | Out-String).TrimEnd()
         
   }
   else { "Offline !! " }; ''
