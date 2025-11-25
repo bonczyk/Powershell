@@ -1,0 +1,556 @@
+If ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { "Please run me with admin rights"; pause; exit }
+
+# ============================= ORIGINAL get-groupusers.ps1 FUNCTIONS =============================
+# Function to extract domain from distinguished name
+function Get-DomainFromDist($dist) {
+    ($dist -split ",DC=")[1]
+}
+
+# Recursive function to get nested groups
+function Get-GroupGroups($gr) {
+    $grps = @(Get-ADGroupMember $gr | ? { $_.objectClass -eq 'group' } | ? { $_.Name -notin $temp })
+    foreach ($g in $grps) { $global:temp += $g.Name
+        Write-Progress -Activity "Processing $($g.name)" -Status "Retrieving data .." -PercentComplete (($grps.IndexOf($g) / $grps.Count) * 100)
+        [PSCustomObject]@{ Domain = '>> GROUP'; User = $g.Name; DisplayName = ''; Description = '' } 
+        Get-GroupUsers($g.SamAccountName)
+        Get-GroupGroups($g.SamAccountName)
+    }
+}
+
+# Function to get users in a group
+function Get-GroupUsers($gr) {
+    $users = Get-ADGroupMember $gr | ? { $_.objectClass -eq 'user' }
+    foreach ($user in $users) {
+        $domain = Get-DomainFromDist($user.distinguishedName)
+        $uinfo = Get-ADUser $user -Properties DisplayName, Description -Server "$domain.aib.pri"
+        [PSCustomObject]@{ Domain = $domain; User = $user.Name; DisplayName = $uinfo.displayName; Description = $uinfo.Description }
+    }
+}
+
+# Function to get all members (users and groups) recursively for a group
+function Get-GroupsAll($grp) {
+    $gr = Get-ADGroup -Filter { Name -eq $grp } -Properties ManagedBy, Description
+    $exist = [bool]$gr
+    if ($exist) {
+        $global:temp = @()
+        Get-GroupUsers($group) | % { $all += ,$_ }
+        Get-GroupGroups($group)| % { $all += ,$_ }
+        Write-Progress "Processing " -Completed
+        $currPath = if ($psISE) { Split-Path $psISE.CurrentFile.FullPath } else { $PSScriptRoot }
+        $filename = "$($grp) - $(get-date -Format 'yyyy-MM-dd HH-mm').txt"
+        $manager = if ($gr.ManagedBy) { (get-aduser $gr.ManagedBy -Properties DisplayName).DisplayName } else { 'OWNER' }
+        ""
+        "$($gr.Name)`n$($manager)`n$($gr.Description)`n" + ($all | Out-String).TrimEnd() | tee $currPath\group_reports\$filename
+        "`nExported to file : ..\group_reports\$filename"
+    } else { "Group not found: $grp" }
+    ""; rv temp
+}
+
+# ============================= ORIGINAL get-report.ps1 (with minor mods for integration) =============================
+Clear-Host
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+
+# ============================= CONFIGURATION =============================
+# Define servers and their drives
+$servers = @{ s1 = 'F,H,I'
+    s2 = 'F,H,J'
+    s3 = 'F,G,H,K'
+    s4 = 'D' }
+
+# Excluded shares and accounts
+$ExcludeShares = @("IPC$", "print$", "ADMIN$", "NETLOGON", "SYSVOL")
+$SkipAccounts = "BUILTIN\Users", "NT AUTHORITY\SYSTEM", "BUILTIN\Administrators", "CREATOR OWNER", "NT SERVICE", "NT AUTHORITY\SELF"
+$DangerousAccounts = "Everyone", "Domain Users", "Authenticated Users", "Users"  # Translated "Wszyscy" and "Użytkownicy domeny" to English equivalents
+$StartTime = Get-Date
+
+$path = if ($psise) { Split-Path $psise.CurrentFile.FullPath } else { $PSScriptRoot }
+
+$se = $servers.GetEnumerator() | % {
+    [PSCustomObject]@{
+        Name   = $_.Name 
+        Drives = $_.Value -split ','
+    }
+}
+
+if (-not (Test-Path Variable:Cred)) { $Cred = Get-Credential adm_58691 }
+
+# ============================= RANDOM SPINNER =============================
+# Spinner options for progress animation
+$Spinners = @{
+    Classic = '|', '/', '-', '\'
+    Quarter = '◴', '◷', '◶', '◵'
+    Braille = '⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷'
+    Earth   = 'Earth', 'Earth', 'Earth'
+    Moon    = 'Moon', 'Moon', 'Moon', 'Moon', 'Moon', 'Moon', 'Moon', 'Moon'
+    Bounce  = 'Dot', 'Dot', 'Dot', 'Dot', 'Dot', 'Dot', 'Dot', 'Dot', 'Dot', 'Dot'
+    Pulse   = 'Pulse', 'Pulse', 'Pulse', 'Pulse'
+    Hacker  = 'h', 'a', 'c', 'k', 'e', 'r', 'm', 'a', 'n'
+}
+$CurrentSpinner = $Spinners | Get-Random -Count 1
+$SpinnerArray = $CurrentSpinner.Values
+$SpinIndex = 0
+
+# ============================= SCRIPT FOR JOBS =============================
+# Script block for parallel processing of servers
+$ScriptBlock = {
+    param($Server,$drives,$Cred,$Ex,$Skip,$Danger)
+    $localLogs = @()
+    $localResults = @()
+    $add = { param($msg); $localLogs+= "[$(Get-Date -Format HH:mm:ss)] [$Server] $msg" }
+    try {
+       $opt = New-CimSessionOption -Protocol DCOM
+       $ses = New-CimSession -Computername $Server -SessionOption $opt -ErrorAction Stop -Credential $cred
+       $Shares = Get-SmbShare -CimSession $ses -ErrorAction Stop |
+                  Where-Object { $_.Name -notin $Ex } | ? { $_.Path[0] -in $Drives } | ? {$_.path -notlike "*home*" }
+        &$add "Found $($Shares.Count) shares"
+         Remove-CimSession $ses
+    }
+    catch {   &$add "ERROR: Could not retrieve shares → $($_.Exception.Message)";  
+           return @{ Logs = $localLogs; Results = $localResults } }
+    if (!$Shares) { &$add "No regular shares";  return @{ Logs = $localLogs; Results = $localResults } }
+    $totalShares = $Shares.Count
+    $processedShares = 0
+    $Shares | Group-Object { ($_.Path -split ':')[0] } | ForEach-Object {
+        $Drive   = $_.Name
+        $AdminSh = "$Drive$"
+        $DrvName = "DRS_$(Get-Random)"
+        try {
+            New-PSDrive -Name $DrvName -PSProvider FileSystem -Root "\\$Server\$AdminSh" -Credential $Cred -ErrorAction Stop| Out-Null
+            &$add "Mapped \\$Server\$AdminSh"
+        }
+        catch {
+            &$add "Could not map \\$Server\$AdminSh → $($_.Exception.Message)"
+            return "\\$Server\$AdminSh " + $($_.Exception.Message); continue
+        }
+        try {
+            foreach ($Share in $_.Group) {
+                $Path  = "$DrvName`:\$($Share.Path.Substring(3))"
+                cd $path
+                try {
+                    $Acl = Get-Acl . -ErrorAction Stop
+                    foreach ($Rule in $Acl.Access) {
+                        $Id = try { $Rule.IdentityReference.Value } catch {$Rule.IdentityReference.toString() }
+                        if ($Skip -contains $Id) { continue }
+                        $IsDanger = $Danger | Where-Object { $Id -match $_ }
+                        $Risk = if ($IsDanger) { "HIGH" }
+                                elseif ($Rule.FileSystemRights -match "FullControl|Modify") { "MEDIUM" }
+                                else { "LOW" }
+                        $localResults += [pscustomobject]@{
+                            Server     = $Server
+                            Share      = $Share.Name
+                            UNC        = "\\$Server\$($Share.Name)"
+                            LocalPath  = $Share.Path
+                            Identity   = $Id
+                            Rights     = ($Rule.FileSystemRights -join ', ')
+                            Type       = $Rule.AccessControlType
+                            Inherited  = $Rule.IsInherited
+                            Risk       = $Risk
+                        }
+                    }
+                }
+                catch {  &$add "ACL ERROR: $($Share.Name) → $($_.Exception.Message)"  }
+                finally {
+                    $processedShares++
+                    &$add "Processed share $processedShares/$totalShares"
+                }
+            }
+        }
+        finally {Remove-PSDrive -Name $DrvName -Force -ErrorAction SilentlyContinue }
+    }
+    return @{ Logs = $localLogs; Results = $localResults }
+}
+
+# ============================= START PARALLEL =============================
+# Start jobs for each server
+$Jobs = foreach ($s in $se) {
+Start-Job -Name $s.Name -ScriptBlock $ScriptBlock `
+  -ArgumentList $s.name,$s.drives,$Cred,$ExcludeShares,$SkipAccounts,$DangerousAccounts
+}
+
+$TotalServers = $Servers.Count
+Write-Host " Servers: $TotalServers | Start: $(Get-Date -Format 'HH:mm:ss')" -ForegroundColor Cyan
+Write-Host " Spinner: $($CurrentSpinner.Keys) $($SpinnerArray -join ' → ')" -ForegroundColor DarkCyan
+Write-Host "`n Scanning started...`n" -ForegroundColor Green
+
+# Initialize per-server tracking
+$ServerLogs = @{}
+$ServerResults = @{}
+$ServerLogCount = @{}
+$ServerResultCount = @{}
+foreach ($s in $se) {
+    $server = $s.Name
+    $ServerLogs[$server] = @()
+    $ServerResults[$server] = @()
+    $ServerLogCount[$server] = 0
+    $ServerResultCount[$server] = 0
+}
+
+# ============================= LIVE UPDATE LOOP =============================
+# Loop to monitor and display job progress
+while ($Jobs | Where-Object State -eq 'Running') {
+    Clear-Host
+    Write-Host "`nServers status:" -ForegroundColor Cyan
+    $statusTable = @()
+    foreach ($job in $Jobs) {
+        $server = $job.Name
+        $output = Receive-Job -Job $job -Keep -ErrorAction SilentlyContinue
+        if ($output) {
+            foreach ($out in $output) {
+                if ($out -is [hashtable]) {
+                    $currentLogs = $out.Logs
+                    $currentResults = $out.Results
+                    $newLogs = if ($currentLogs.Count -gt $ServerLogCount[$server]) {
+                        $currentLogs | Select-Object -Skip $ServerLogCount[$server]
+                    } else { @() }
+                    $newResults = if ($currentResults.Count -gt $ServerResultCount[$server]) {
+                        $currentResults | Select-Object -Skip $ServerResultCount[$server]
+                    } else { @() }
+                    $ServerLogs[$server] += $newLogs
+                    $ServerResults[$server] += $newResults
+                    $ServerLogCount[$server] = $currentLogs.Count
+                    $ServerResultCount[$server] = $currentResults.Count
+                } else {
+                    if ($out -notin $ServerLogs[$server]) {
+                        $ServerLogs[$server] += $out
+                        $ServerLogCount[$server]++
+                    }
+                }
+            }
+        }
+        $logs = $ServerLogs[$server]
+        $state = $job.State
+        $totalShares = 0
+        $processed = 0
+        $lastMsg = if ($logs) {$logs[-1]} else { "Starting..."}
+        foreach ($log in $logs) {
+            if ($log -match "Found (\d+) shares") { $totalShares = [int]$matches[1] }
+            if ($log -match "Processed share (\d+)/(\d+)") { $processed = [int]$matches[1]; $totalShares = [int]$matches[2] }
+        }
+        $percent = if ($totalShares -gt 0) { [math]::Round(($processed / $totalShares) * 100, 1) } else { 0 }
+        if ($state -eq 'Completed') { $percent = 100; $lastMsg = "Completed" }
+        if ($state -eq 'Failed') { $lastMsg = "Error: $($job.ChildJobs[0].JobStateInfo.Reason)" }
+        $aclCount = $ServerResults[$server].Count
+        $statusTable += [PSCustomObject]@{
+            Server = $server
+            Percent = "$percent%"
+            'ACL Found' = $aclCount
+            'Current Status' = $lastMsg
+        }
+    }
+    $statusTable | Sort-Object Server | Format-Table -AutoSize
+    $SpinChar  = $SpinnerArray[$SpinIndex]; $SpinIndex = ($SpinIndex + 1) % $SpinnerArray.Count
+    Write-Host " $SpinChar | Time: $(Get-Date -Format 'HH:mm:ss')" -ForegroundColor Cyan
+    Start-Sleep -Milliseconds 50
+}
+
+# Collect final outputs after jobs complete
+foreach ($job in $Jobs) {
+    $server = $job.Name
+    $finalOutput = Receive-Job -Job $job -ErrorAction SilentlyContinue
+    if ($finalOutput) {
+        foreach ($out in $finalOutput) {
+            if ($out -is [hashtable]) {
+                $newLogs = if ($out.Logs.Count -gt $ServerLogCount[$server]) {
+                    $out.Logs | Select-Object -Skip $ServerLogCount[$server]
+                } else { @() }
+                $newResults = if ($out.Results.Count -gt $ServerResultCount[$server]) {
+                    $out.Results | Select-Object -Skip $ServerResultCount[$server]
+                } else { @() }
+                $ServerLogs[$server] += $newLogs
+                $ServerResults[$server] += $newResults
+                $ServerLogCount[$server] = $out.Logs.Count
+                $ServerResultCount[$server] = $out.Results.Count
+            } else {
+                if ($out -notin $ServerLogs[$server]) {
+                    $ServerLogs[$server] += $out
+                    $ServerLogCount[$server]++
+                }
+            }
+        }
+    }
+}
+
+# Display final logs
+$AllLogs = $ServerLogs.Values | ForEach-Object { $_ }
+$AllLogs | Write-Host -ForegroundColor DarkGray
+
+$Jobs | Remove-Job -Force
+
+$AllResults = $ServerResults.Values | ForEach-Object { $_ }
+$AllResults.Count
+
+# ============================= SUMMARY =============================
+$Results = $AllResults | Sort-Object Server, Share, Identity
+$Duration = ((Get-Date) - $StartTime)
+$HighRisk = $Results | Where-Object Risk -eq "HIGH"
+$Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$OutPath = "$Path\logs\DRSACL_$timestamp"
+
+Write-Host "`n`n" ("=" * 90) -ForegroundColor Magenta
+Write-Host " SCAN COMPLETED!" -ForegroundColor Green
+Write-Host " Duration : $($Duration.ToString('mm\:ss'))" -ForegroundColor Cyan
+Write-Host " Shares   : $(($Refsults.Share | Select-Object -Unique).Count)" -ForegroundColor Cyan
+Write-Host " ACL Rules: $($Results.Count)" -ForegroundColor Cyan
+
+if ($HighRisk) {
+    Write-Host "`n WARNING! Found $($HighRisk.Count) DANGEROUS permissions!" -ForegroundColor Red
+    $HighRisk | Select-Object Server, Share, Identity, Rights -Unique | Format-Table -AutoSize
+}
+
+# ============================= EXPORTS =============================
+$Results | Export-Csv "$OutPath.csv" -Encoding UTF8 -NoTypeInformation
+$Results | Export-Excel "$OutPath.xlsx" -AutoSize -BoldTopRow -FreezeTopRow -TableName "SMB_ACL"
+$Results | ConvertTo-Html -Title "SMB Root ACL Report" -Head "<style>table{border-collapse:collapse;width:100%}th{background:#2c3e50;color:white;padding:10px}td{padding:8px;border:1px solid #ddd}.HIGH{background:#ffcccc}</style>" `
+    -PreContent "<h1>SMB Share Root Permissions Report</h1><p>Generated: $(Get-Date) | Time: $($Duration.ToString('mm\:ss'))</p>" | Out-File "$OutPath.html" -Encoding utf8
+
+Write-Host "`n Files saved" -ForegroundColor Yellow
+"CSV", "XLSX", "HTML" | ForEach-Object { Write-Host "   $OutPath.$($_)" -ForegroundColor Green }
+
+# ============================= NEW: GROUP MEMBERSHIP REPORTING =============================
+Write-Host "`n`n" ("=" * 90) -ForegroundColor Magenta
+Write-Host " GENERATING GROUP REPORTS..." -ForegroundColor Green
+
+# Create output folder for group reports
+$GroupOutPath = "$Path\group_reports"
+if (-not (Test-Path $GroupOutPath)) { New-Item -Path $GroupOutPath -ItemType Directory | Out-Null }
+
+# Extract unique groups from Identity
+$UniqueGroups = $Results.Identity | Sort-Object -Unique | ? { $_ -notmatch ".*\d{5}.*" -and $_ -notlike "*srv_*" } |
+    Where-Object { $_ -match '^[A-Z0-9\\]+\\' -and $_ -notin $DangerousAccounts -and $_ -notin $SkipAccounts } | 
+    % { ($_ -split '\\')[-1] } 
+
+Write-Host " Found $($UniqueGroups.Count) unique groups to process." -ForegroundColor Cyan
+
+$ExpandedAccess = @()
+$GroupFiles = @()
+foreach ($group in $UniqueGroups) {
+    Write-Host " Processing group: $group" -ForegroundColor Yellow
+    try {
+        # Get group membership data
+        $gr = Get-ADGroup -Filter { SamAccountName -eq $group} -Properties  ManagedBy, Description
+        if ($gr) {
+            $filename = "$GroupOutPath\$group.csv"
+            $allMembers = @()
+            if (test-path $filename) {$allMembers = Import-Csv $filename}
+            else { Get-GroupUsers($group) | % { $allMembers += ,$_ }
+                    Get-GroupGroups($group)| % { $allMembers += ,$_ } 
+                    $allMembers | Export-Csv $filename -NoTypeInformation 
+                    $GroupFiles += $filename
+                    }
+            
+            # Find all ACL entries for this group
+            $groupAcls = $Results | Where-Object { ($_.Identity -split '\\')[-1] -eq "$group" }
+            
+            foreach ($acl in $groupAcls) {
+                foreach ($member in $allMembers) {
+                    if ($member.User) {  # Only add for users, not subgroups
+                         $ExpandedAccess += [pscustomobject]@{
+                            Server     = $acl.Server
+                            Share      = $acl.Share
+                            UNC        = $acl.UNC
+                            LocalPath  = $acl.LocalPath
+                            Group      = $group 
+                            User       = $member.User  
+                            DisplayName= $member.DisplayName
+                            Domain     = $member.Domain
+                            Rights     = $acl.Rights
+                            Type       = $acl.Type
+                            Inherited  = $acl.Inherited
+                            Risk       = $acl.Risk
+                        }
+                    }
+                }
+            }
+        } else {
+            Write-Host " Group not found: $group" -ForegroundColor Red
+            $err += "`n Group not found: $group"
+        }
+    }
+    catch {
+        Write-Host " Error for group $group : $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Generate expanded access report
+$ExpandedTimestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$ExpandedOutPath = "$Path\logs\ExpandedAccess_$ExpandedTimestamp"
+$SortedExpanded = $ExpandedAccess | Sort-Object Server, Share, Group, User
+$SortedExpanded | Export-Csv "$ExpandedOutPath.csv" -Encoding UTF8 -NoTypeInformation
+$SortedExpanded | Export-Excel "$ExpandedOutPath.xlsx" -AutoSize -BoldTopRow -FreezeTopRow -TableName "Expanded_Access"
+
+# Add collapsible groups to Excel
+$pkg = Open-ExcelPackage -Path "$ExpandedOutPath.xlsx"
+$ws = $pkg.Workbook.Worksheets[1]  # Assume first sheet
+$currentGroup = ""
+$row = 2  # Start after header
+$groupStart = 0
+$level = 0
+foreach ($item in $SortedExpanded) {
+    if ($item.Group -ne $currentGroup) {
+        if ($groupStart -gt 0) {
+            # Collapse previous group
+            for ($i = $groupStart + 1; $i -le $row - 1; $i++) {
+                $ws.Row($i).OutlineLevel = 1
+                $ws.Row($i).Collapsed = $true
+            }
+            $ws.Row($groupStart).OutlineLevel = 0
+            $ws.Row($groupStart).Collapsed = $false
+        }
+        $currentGroup = $item.Group
+        $groupStart = $row
+    }
+    $row++
+}
+# Last group
+if ($groupStart -gt 0) {
+    for ($i = $groupStart + 1; $i -le $row - 1; $i++) {
+        $ws.Row($i).OutlineLevel = 1
+        $ws.Row($i).Collapsed = $true
+    }
+    $ws.Row($groupStart).OutlineLevel = 0
+    $ws.Row($groupStart).Collapsed = $false
+}
+Close-ExcelPackage $pkg 
+
+# Generate interactive HTML with collapsible groups
+$htmlContent = @"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Expanded Share Access Report</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            line-height: 1.6; 
+            color: #333; 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background-color: #f8f9fa; 
+        }
+        header { 
+            background-color: #004080; 
+            color: white; 
+            padding: 20px; 
+            text-align: center; 
+            border-radius: 8px 8px 0 0; 
+        }
+        h1 { 
+            margin: 0; 
+            font-size: 2em; 
+        }
+        .report-info { 
+            font-size: 0.9em; 
+            margin-top: 10px; 
+        }
+        details { 
+            margin-bottom: 20px; 
+            border: 1px solid #ddd; 
+            border-radius: 4px; 
+            overflow: hidden; 
+        }
+        summary { 
+            cursor: pointer; 
+            background-color: #e9ecef; 
+            padding: 10px; 
+            font-weight: bold; 
+            color: #004080; 
+            transition: background-color 0.3s; 
+        }
+        summary:hover { 
+            background-color: #dee2e6; 
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 10px; 
+        }
+        th { 
+            background-color: #004080; 
+            color: white; 
+            padding: 12px; 
+            text-align: left; 
+        }
+        td { 
+            padding: 10px; 
+            border: 1px solid #ddd; 
+        }
+        tr:nth-child(even) { 
+            background-color: #f2f2f2; 
+        }
+        tr:hover { 
+            background-color: #e2e2e2; 
+        }
+        .HIGH { 
+            background-color: #ffcccc; 
+            font-weight: bold; 
+        }
+        footer { 
+            text-align: center; 
+            margin-top: 40px; 
+            font-size: 0.8em; 
+            color: #666; 
+            border-top: 1px solid #ddd; 
+            padding-top: 10px; 
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Network Share Access Report - Expanded View</h1>
+        <div class="report-info">
+            Generated: $(Get-Date -Format "dd MMMM yyyy HH:mm") | Scan duration: $($Duration.ToString('mm\:ss'))<br>
+            Prepared for: IT Security Department, Dealers
+        </div>
+    </header>
+"@
+
+$currentServerShare = ""
+$currentGroup = ""
+foreach ($item in $SortedExpanded) {
+    $serverShareKey = "$($item.Server)-$($item.Share)"
+    if ($serverShareKey -ne $currentServerShare) {
+        if ($currentGroup -ne "") { $htmlContent += "</table></details>" }
+        if ($currentServerShare -ne "") { $htmlContent += "</details>" }
+        $currentServerShare = $serverShareKey
+        $currentGroup = ""
+        $htmlContent += "<details open><summary>Server: $($item.Server) | Share: $($item.Share) (UNC: $($item.UNC))</summary>"
+    }
+    if ($item.Group -ne $currentGroup) {
+        if ($currentGroup -ne "") { $htmlContent += "</table></details>" }
+        $currentGroup = $item.Group
+        $htmlContent += "<details open><summary>Group: $($item.Group)</summary><table><tr><th>User</th><th>Display Name</th><th>Domain</th><th>Rights</th><th>Type</th><th>Inherited</th><th>Risk</th></tr>"
+    }
+    $riskClass = if ($item.Risk -eq "HIGH") { "class='HIGH'" } else { "" }
+    $htmlContent += "<tr $riskClass><td>$($item.User)</td><td>$($item.DisplayName)</td><td>$($item.Domain)</td><td>$($item.Rights)</td><td>$($item.Type)</td><td>$($item.Inherited)</td><td>$($item.Risk)</td></tr>"
+}
+if ($currentGroup -ne "") { $htmlContent += "</table></details>" }
+if ($currentServerShare -ne "") { $htmlContent += "</details>" }
+$htmlContent += @"
+    <footer>
+        Report generated automatically by ACL Scanning System. <br>
+        For questions, contact: [IT Security Email] | Confidential - For internal use only.
+    </footer>
+</body>
+</html>
+"@
+$htmlContent | Out-File "$ExpandedOutPath.html" -Encoding utf8
+
+Write-Host "`n Expanded access report exported to:" -ForegroundColor Green
+Write-Host "   $ExpandedOutPath.csv" -ForegroundColor Green
+Write-Host "   $ExpandedOutPath.xlsx (with row grouping)" -ForegroundColor Green
+Write-Host "   $ExpandedOutPath.html (with interactive expanding)" -ForegroundColor Green
+
+# Generate summary report for all groups
+$SummaryPath = "$GroupOutPath\Group_Summary_$Timestamp.txt"
+"Summary of Group Membership Reports:`n" + ($GroupFiles -join "`n") | Out-File $SummaryPath
+Write-Host " Group summary exported to: $SummaryPath" -ForegroundColor Green
+
+Write-Host " Error's :"
+Write-Host ($err | Out-String)
+
+Write-Host "`n Done! Have a nice audit!" -ForegroundColor Magenta
+pause
