@@ -13,6 +13,138 @@
     Requires: Generate-ShareAccessReport.ps1, Microsoft Outlook (for email functionality)
 #>
 
+#region Helper Functions for AD User Lookup
+
+<#
+.SYNOPSIS
+    Resolves email addresses to display names using Active Directory.
+
+.DESCRIPTION
+    Takes an email address and queries Active Directory to retrieve the user's display name.
+    Caches results to improve performance for repeated lookups.
+
+.PARAMETER EmailAddress
+    Email address to resolve.
+
+.PARAMETER Cache
+    Optional hashtable for caching results to improve performance.
+
+.RETURNS
+    Display name from AD, or the original email if not found or AD unavailable.
+#>
+function Get-DisplayNameFromEmail {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$EmailAddress,
+
+        [Parameter(Mandatory = $false)]
+        [hashtable]$Cache = @{}
+    )
+
+    # Return null/empty if input is null/empty
+    if ([string]::IsNullOrWhiteSpace($EmailAddress)) {
+        return $null
+    }
+
+    # Check cache first
+    if ($Cache.ContainsKey($EmailAddress)) {
+        return $Cache[$EmailAddress]
+    }
+
+    try {
+        # Try to query Active Directory
+        $adUser = Get-ADUser -Filter "EmailAddress -eq '$EmailAddress'" -Properties DisplayName -ErrorAction Stop
+        
+        if ($adUser -and $adUser.DisplayName) {
+            $displayName = $adUser.DisplayName
+            Write-Verbose "Resolved '$EmailAddress' to '$displayName'"
+        }
+        else {
+            # AD user found but no display name, use the Name property
+            if ($adUser -and $adUser.Name) {
+                $displayName = $adUser.Name
+                Write-Verbose "Resolved '$EmailAddress' to '$displayName' (using Name)"
+            }
+            else {
+                # Not found, use email as fallback
+                $displayName = $EmailAddress
+                Write-Verbose "Could not resolve '$EmailAddress', using email as display name"
+            }
+        }
+    }
+    catch {
+        # AD query failed (module not available, no connection, etc.)
+        $displayName = $EmailAddress
+        Write-Verbose "Failed to query AD for '$EmailAddress': $($_.Exception.Message). Using email as display name."
+    }
+
+    # Cache the result
+    $Cache[$EmailAddress] = $displayName
+    
+    return $displayName
+}
+
+<#
+.SYNOPSIS
+    Enriches data with display names from email addresses.
+
+.DESCRIPTION
+    Takes the expanded data and resolves Owner1 and Owner2 email addresses to display names,
+    adding OwnerDisplayName1 and OwnerDisplayName2 properties.
+
+.PARAMETER Data
+    Array of PSCustomObjects with Owner1 and Owner2 email addresses.
+
+.RETURNS
+    Enriched data with display name properties added.
+#>
+function Add-OwnerDisplayNames {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [PSCustomObject[]]$Data
+    )
+
+    Write-Verbose "Enriching data with owner display names from Active Directory..."
+    
+    # Create a cache for performance
+    $displayNameCache = @{}
+    
+    # Get unique email addresses to resolve
+    $uniqueEmails = @($Data | ForEach-Object { $_.Owner1; $_.Owner2 } | Where-Object { $_ } | Select-Object -Unique)
+    
+    Write-Host "Resolving $($uniqueEmails.Count) unique owner email(s) to display names..." -ForegroundColor Cyan
+    
+    # Pre-populate cache
+    foreach ($email in $uniqueEmails) {
+        $null = Get-DisplayNameFromEmail -EmailAddress $email -Cache $displayNameCache
+    }
+    
+    # Add display name properties to each record
+    $enrichedData = foreach ($record in $Data) {
+        # Create a copy with new properties
+        $enriched = $record.PSObject.Copy()
+        
+        # Add display names
+        if ($record.Owner1) {
+            Add-Member -InputObject $enriched -NotePropertyName 'OwnerDisplayName1' -NotePropertyValue $displayNameCache[$record.Owner1] -Force
+        }
+        if ($record.Owner2) {
+            Add-Member -InputObject $enriched -NotePropertyName 'OwnerDisplayName2' -NotePropertyValue $displayNameCache[$record.Owner2] -Force
+        }
+        
+        $enriched
+    }
+    
+    Write-Host "✓ Owner display names resolved" -ForegroundColor Green
+    Write-Host ""
+    
+    return $enrichedData
+}
+
+#endregion
+
 #region Create-PerOwnerReports Function
 
 <#
@@ -23,10 +155,14 @@
     Takes the expanded share access data and creates individual reports for each owner,
     filtering to only include shares they own (either as Owner1 or Owner2). Each owner
     gets their own set of reports in the specified formats.
+    
+    Owner1 and Owner2 are treated as email addresses and will be resolved to display names
+    using Active Directory (Get-ADUser). Display names are shown in reports along with email addresses.
 
 .PARAMETER Data
     Mandatory. Array of PSCustomObjects containing share access information with properties:
     Server, Share, ADGroupName, Domain, User, DisplayName, UserGroup, SharePath, Owner1, Owner2, Rights
+    Note: Owner1 and Owner2 should be email addresses. Display names will be resolved from Active Directory.
 
 .PARAMETER OutputDirectory
     Directory where owner reports will be saved. Defaults to current directory.
@@ -91,37 +227,52 @@ function Create-PerOwnerReports {
     }
 
     process {
-        # Get unique owners (combining Owner1 and Owner2)
+        # Enrich data with display names from email addresses
+        $enrichedData = Add-OwnerDisplayNames -Data $Data
+        
+        # Get unique owner emails (combining Owner1 and Owner2)
         Write-Verbose "Identifying unique owners..."
-        $uniqueOwners = @($Data | ForEach-Object { $_.Owner1; $_.Owner2 } | Where-Object { $_ } | Select-Object -Unique | Sort-Object)
+        $uniqueOwnerEmails = @($enrichedData | ForEach-Object { $_.Owner1; $_.Owner2 } | Where-Object { $_ } | Select-Object -Unique | Sort-Object)
 
-        if ($uniqueOwners.Count -eq 0) {
+        if ($uniqueOwnerEmails.Count -eq 0) {
             Write-Warning "No owners found in the provided data."
             return
         }
 
-        Write-Host "Found $($uniqueOwners.Count) unique owner(s)" -ForegroundColor Cyan
+        # Create mapping of emails to display names
+        $emailToDisplayName = @{}
+        foreach ($record in $enrichedData) {
+            if ($record.Owner1 -and -not $emailToDisplayName.ContainsKey($record.Owner1)) {
+                $emailToDisplayName[$record.Owner1] = $record.OwnerDisplayName1
+            }
+            if ($record.Owner2 -and -not $emailToDisplayName.ContainsKey($record.Owner2)) {
+                $emailToDisplayName[$record.Owner2] = $record.OwnerDisplayName2
+            }
+        }
+
+        Write-Host "Found $($uniqueOwnerEmails.Count) unique owner(s)" -ForegroundColor Cyan
         Write-Host ""
 
         $results = @()
         $ownerIndex = 0
 
-        foreach ($owner in $uniqueOwners) {
+        foreach ($ownerEmail in $uniqueOwnerEmails) {
             $ownerIndex++
-            Write-Host "[$ownerIndex/$($uniqueOwners.Count)] Processing owner: $owner" -ForegroundColor Yellow
+            $ownerDisplayName = $emailToDisplayName[$ownerEmail]
+            Write-Host "[$ownerIndex/$($uniqueOwnerEmails.Count)] Processing owner: $ownerDisplayName ($ownerEmail)" -ForegroundColor Yellow
 
             # Filter data for this owner (shares they own as Owner1 or Owner2)
-            $ownerData = $Data | Where-Object { $_.Owner1 -eq $owner -or $_.Owner2 -eq $owner }
+            $ownerData = $enrichedData | Where-Object { $_.Owner1 -eq $ownerEmail -or $_.Owner2 -eq $ownerEmail }
 
             if ($ownerData.Count -eq 0) {
-                Write-Warning "  No shares found for owner: $owner"
+                Write-Warning "  No shares found for owner: $ownerDisplayName"
                 continue
             }
 
-            Write-Verbose "  Found $($ownerData.Count) record(s) for $owner"
+            Write-Verbose "  Found $($ownerData.Count) record(s) for $ownerDisplayName"
 
-            # Sanitize owner name for file naming
-            $safeOwnerName = $owner -replace '[\\/:*?"<>|]', '_'
+            # Sanitize display name for file naming
+            $safeOwnerName = $ownerDisplayName -replace '[\\/:*?"<>|]', '_'
             $safeOwnerName = $safeOwnerName -replace '\s+', '_'
 
             # Build paths for each format
@@ -157,13 +308,14 @@ function Create-PerOwnerReports {
 
                 # Store result information
                 $results += [PSCustomObject]@{
-                    Owner          = $owner
-                    RecordCount    = $ownerData.Count
-                    UniqueShares   = ($ownerData.Share | Select-Object -Unique).Count
-                    HtmlReport     = $htmlPath
-                    XlsxReport     = $xlsxPath
-                    PdfReport      = $pdfPath
-                    GeneratedDate  = Get-Date
+                    OwnerDisplayName = $ownerDisplayName
+                    OwnerEmail       = $ownerEmail
+                    RecordCount      = $ownerData.Count
+                    UniqueShares     = ($ownerData.Share | Select-Object -Unique).Count
+                    HtmlReport       = $htmlPath
+                    XlsxReport       = $xlsxPath
+                    PdfReport        = $pdfPath
+                    GeneratedDate    = Get-Date
                 }
 
                 Write-Host "  ✓ Report generated successfully" -ForegroundColor Green
@@ -172,7 +324,7 @@ function Create-PerOwnerReports {
                 if ($pdfPath) { Write-Host "    PDF:  $pdfPath" -ForegroundColor Gray }
             }
             catch {
-                Write-Error "  Failed to generate report for $owner : $($_.Exception.Message)"
+                Write-Error "  Failed to generate report for $ownerDisplayName : $($_.Exception.Message)"
             }
 
             Write-Host ""
@@ -306,69 +458,83 @@ function Prepare-OwnerConfirmationEmail {
     }
 
     process {
-        # Get unique owners
+        # Enrich data with display names from email addresses
+        $enrichedData = Add-OwnerDisplayNames -Data $Data
+        
+        # Get unique owner emails (Owner1 and Owner2 are email addresses)
         Write-Verbose "Identifying unique owners..."
-        $uniqueOwners = @($Data | ForEach-Object { $_.Owner1; $_.Owner2 } | Where-Object { $_ } | Select-Object -Unique | Sort-Object)
+        $uniqueOwnerEmails = @($enrichedData | ForEach-Object { $_.Owner1; $_.Owner2 } | Where-Object { $_ } | Select-Object -Unique | Sort-Object)
 
-        if ($uniqueOwners.Count -eq 0) {
+        if ($uniqueOwnerEmails.Count -eq 0) {
             Write-Warning "No owners found in the provided data."
             return
+        }
+
+        # Create mapping of emails to display names
+        $emailToDisplayName = @{}
+        foreach ($record in $enrichedData) {
+            if ($record.Owner1 -and -not $emailToDisplayName.ContainsKey($record.Owner1)) {
+                $emailToDisplayName[$record.Owner1] = $record.OwnerDisplayName1
+            }
+            if ($record.Owner2 -and -not $emailToDisplayName.ContainsKey($record.Owner2)) {
+                $emailToDisplayName[$record.Owner2] = $record.OwnerDisplayName2
+            }
         }
 
         Write-Host ""
         Write-Host "========================================" -ForegroundColor Cyan
         Write-Host "Preparing Confirmation Emails" -ForegroundColor Cyan
         Write-Host "========================================" -ForegroundColor Cyan
-        Write-Host "Found $($uniqueOwners.Count) unique owner(s)" -ForegroundColor Cyan
+        Write-Host "Found $($uniqueOwnerEmails.Count) unique owner(s)" -ForegroundColor Cyan
         Write-Host ""
 
         $emailsCreated = 0
         $ownerIndex = 0
 
-        foreach ($owner in $uniqueOwners) {
+        foreach ($ownerEmail in $uniqueOwnerEmails) {
             $ownerIndex++
-            Write-Host "[$ownerIndex/$($uniqueOwners.Count)] Preparing email for: $owner" -ForegroundColor Yellow
+            $ownerDisplayName = $emailToDisplayName[$ownerEmail]
+            Write-Host "[$ownerIndex/$($uniqueOwnerEmails.Count)] Preparing email for: $ownerDisplayName ($ownerEmail)" -ForegroundColor Yellow
 
-            # Get owner's email address
-            $ownerEmail = ""
-            if ($OwnerEmails.ContainsKey($owner)) {
-                $ownerEmail = $OwnerEmails[$owner]
-            }
-            else {
-                # Try to use owner name as email or leave blank for manual entry
-                Write-Warning "  No email address found for '$owner' in OwnerEmails parameter."
-                Write-Host "  Email will be created with blank recipient - please enter manually in Outlook." -ForegroundColor Yellow
+            # Owner1/Owner2 are already email addresses, use them directly
+            # OwnerEmails parameter is deprecated but kept for backward compatibility
+            $recipientEmail = $ownerEmail
+            if ($OwnerEmails.ContainsKey($ownerDisplayName)) {
+                # Legacy: if display name mapping exists, use it
+                $recipientEmail = $OwnerEmails[$ownerDisplayName]
+                Write-Verbose "  Using email from OwnerEmails parameter: $recipientEmail"
             }
 
             # Filter data for this owner
-            $ownerData = $Data | Where-Object { $_.Owner1 -eq $owner -or $_.Owner2 -eq $owner }
+            $ownerData = $enrichedData | Where-Object { $_.Owner1 -eq $ownerEmail -or $_.Owner2 -eq $ownerEmail }
 
             if ($ownerData.Count -eq 0) {
-                Write-Warning "  No shares found for owner: $owner"
+                Write-Warning "  No shares found for owner: $ownerDisplayName"
                 continue
             }
 
             # Get unique shares for this owner
             $ownerShares = $ownerData | Select-Object Server, Share, SharePath -Unique | Sort-Object Server, Share
 
-            # Create email body
-            $emailBody = Build-ConfirmationEmailBody -Owner $owner -OwnerData $ownerData -OwnerShares $ownerShares `
+            # Create email body using display name
+            $emailBody = Build-ConfirmationEmailBody -Owner $ownerDisplayName -OwnerEmail $ownerEmail `
+                -OwnerData $ownerData -OwnerShares $ownerShares `
                 -DeadlineDate $DeadlineDate -CompanyName $CompanyName -ContactEmail $ContactEmail -Signature $Signature
 
             # Create new email
             try {
                 $mail = $outlook.CreateItem(0) # 0 = olMailItem
 
-                # Set email properties
-                if ($ownerEmail) {
-                    $mail.To = $ownerEmail
+                # Set email properties - use the email address as recipient
+                if ($recipientEmail) {
+                    $mail.To = $recipientEmail
                 }
                 $mail.Subject = "${SubjectPrefix}: Access Review for Your Owned File Shares"
                 $mail.HTMLBody = $emailBody
 
                 # Attach report if requested
                 if ($AttachReports) {
-                    $safeOwnerName = $owner -replace '[\\/:*?"<>|]', '_'
+                    $safeOwnerName = $ownerDisplayName -replace '[\\/:*?"<>|]', '_'
                     $safeOwnerName = $safeOwnerName -replace '\s+', '_'
                     
                     # Find the most recent report for this owner
@@ -381,7 +547,7 @@ function Prepare-OwnerConfirmationEmail {
                         Write-Host "  ✓ Attached report: $($reportFiles[0].Name)" -ForegroundColor Gray
                     }
                     else {
-                        Write-Warning "  No report found for owner '$owner' in directory: $ReportsDirectory"
+                        Write-Warning "  No report found for owner '$ownerDisplayName' in directory: $ReportsDirectory"
                     }
                 }
 
@@ -392,7 +558,7 @@ function Prepare-OwnerConfirmationEmail {
                 Write-Host "  ✓ Email displayed in Outlook (ready for review)" -ForegroundColor Green
             }
             catch {
-                Write-Error "  Failed to create email for $owner : $($_.Exception.Message)"
+                Write-Error "  Failed to create email for $ownerDisplayName : $($_.Exception.Message)"
             }
 
             Write-Host ""
@@ -432,6 +598,7 @@ function Build-ConfirmationEmailBody {
     [CmdletBinding()]
     param(
         [string]$Owner,
+        [string]$OwnerEmail,
         [PSCustomObject[]]$OwnerData,
         [PSCustomObject[]]$OwnerShares,
         [datetime]$DeadlineDate,

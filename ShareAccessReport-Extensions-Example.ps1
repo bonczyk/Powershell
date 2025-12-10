@@ -23,6 +23,7 @@
 Write-Host "Creating sample data..." -ForegroundColor Cyan
 
 # Create sample expanded data that matches the expected structure
+# Note: Owner1 and Owner2 are now email addresses that will be resolved to display names via AD
 $SampleExpandedData = @(
     [PSCustomObject]@{
         Server = "FileServer01"
@@ -33,8 +34,8 @@ $SampleExpandedData = @(
         DisplayName = "John Smith"
         UserGroup = "Finance Department"
         SharePath = "D:\Shares\Finance"
-        Owner1 = "Jane Doe"
-        Owner2 = "Mike Johnson"
+        Owner1 = "jane.doe@company.com"
+        Owner2 = "mike.johnson@company.com"
         Rights = "Read, Execute"
     }
     [PSCustomObject]@{
@@ -46,8 +47,8 @@ $SampleExpandedData = @(
         DisplayName = "Mike Johnson"
         UserGroup = "Finance Management"
         SharePath = "D:\Shares\Finance"
-        Owner1 = "Jane Doe"
-        Owner2 = "Mike Johnson"
+        Owner1 = "jane.doe@company.com"
+        Owner2 = "mike.johnson@company.com"
         Rights = "FullControl"
     }
     [PSCustomObject]@{
@@ -59,8 +60,8 @@ $SampleExpandedData = @(
         DisplayName = "Jane Doe"
         UserGroup = "Finance Management"
         SharePath = "D:\Shares\Finance"
-        Owner1 = "Jane Doe"
-        Owner2 = "Mike Johnson"
+        Owner1 = "jane.doe@company.com"
+        Owner2 = "mike.johnson@company.com"
         Rights = "FullControl"
     }
     [PSCustomObject]@{
@@ -72,7 +73,7 @@ $SampleExpandedData = @(
         DisplayName = "Sarah Thompson"
         UserGroup = "Human Resources"
         SharePath = "D:\Shares\HR"
-        Owner1 = "Sarah Thompson"
+        Owner1 = "sarah.thompson@company.com"
         Owner2 = $null
         Rights = "Modify, Write"
     }
@@ -85,7 +86,7 @@ $SampleExpandedData = @(
         DisplayName = "Robert Brown"
         UserGroup = "HR Support"
         SharePath = "D:\Shares\HR"
-        Owner1 = "Sarah Thompson"
+        Owner1 = "sarah.thompson@company.com"
         Owner2 = $null
         Rights = "Read"
     }
@@ -98,8 +99,8 @@ $SampleExpandedData = @(
         DisplayName = "Alice Williams"
         UserGroup = "Engineering"
         SharePath = "E:\Shares\Engineering"
-        Owner1 = "David Lee"
-        Owner2 = "Alice Williams"
+        Owner1 = "david.lee@company.com"
+        Owner2 = "alice.williams@company.com"
         Rights = "Modify, Write"
     }
     [PSCustomObject]@{
@@ -111,8 +112,8 @@ $SampleExpandedData = @(
         DisplayName = "David Lee"
         UserGroup = "Engineering"
         SharePath = "E:\Shares\Engineering"
-        Owner1 = "David Lee"
-        Owner2 = "Alice Williams"
+        Owner1 = "david.lee@company.com"
+        Owner2 = "alice.williams@company.com"
         Rights = "Modify, Write"
     }
     [PSCustomObject]@{
@@ -124,8 +125,8 @@ $SampleExpandedData = @(
         DisplayName = "Patricia Garcia"
         UserGroup = "Engineering Architecture"
         SharePath = "E:\Shares\Engineering"
-        Owner1 = "David Lee"
-        Owner2 = "Alice Williams"
+        Owner1 = "david.lee@company.com"
+        Owner2 = "alice.williams@company.com"
         Rights = "FullControl"
     }
     [PSCustomObject]@{
@@ -137,8 +138,8 @@ $SampleExpandedData = @(
         DisplayName = "Jennifer Thomas"
         UserGroup = "Legal Department"
         SharePath = "F:\Shares\Legal"
-        Owner1 = "Jennifer Thomas"
-        Owner2 = "Kevin Moore"
+        Owner1 = "jennifer.thomas@company.com"
+        Owner2 = "kevin.moore@company.com"
         Rights = "FullControl"
     }
     [PSCustomObject]@{
@@ -150,11 +151,14 @@ $SampleExpandedData = @(
         DisplayName = "Kevin Moore"
         UserGroup = "Legal Department"
         SharePath = "F:\Shares\Legal"
-        Owner1 = "Jennifer Thomas"
-        Owner2 = "Kevin Moore"
+        Owner1 = "jennifer.thomas@company.com"
+        Owner2 = "kevin.moore@company.com"
         Rights = "FullControl"
     }
 )
+
+Write-Host "NOTE: Owner1 and Owner2 are email addresses. In a real AD environment," -ForegroundColor Yellow
+Write-Host "      these will be resolved to display names automatically." -ForegroundColor Yellow
 
 Write-Host "Sample data created: $($SampleExpandedData.Count) records" -ForegroundColor Green
 Write-Host ""
@@ -183,7 +187,7 @@ try {
         -Verbose
 
     Write-Host "Report Generation Results:" -ForegroundColor Yellow
-    $reportResults | Format-Table Owner, RecordCount, UniqueShares -AutoSize
+    $reportResults | Format-Table OwnerDisplayName, OwnerEmail, RecordCount, UniqueShares -AutoSize
     
     Write-Host "All owner reports have been generated in: $ownerReportsDir" -ForegroundColor Green
 }
@@ -203,16 +207,10 @@ Write-Host "========================================" -ForegroundColor Magenta
 Write-Host ""
 
 try {
-    # Define owner email addresses
-    $ownerEmails = @{
-        "Jane Doe" = "jane.doe@company.com"
-        "Mike Johnson" = "mike.johnson@company.com"
-        "Sarah Thompson" = "sarah.thompson@company.com"
-        "David Lee" = "david.lee@company.com"
-        "Alice Williams" = "alice.williams@company.com"
-        "Jennifer Thomas" = "jennifer.thomas@company.com"
-        "Kevin Moore" = "kevin.moore@company.com"
-    }
+    # Note: OwnerEmails parameter is now optional since Owner1/Owner2 are email addresses
+    # It's kept for backward compatibility if you need to override email addresses
+    # In this case, we don't need it since Owner1/Owner2 are already emails
+    $ownerEmails = @{}  # Empty - will use Owner1/Owner2 as email addresses directly
 
     Write-Host "NOTE: This example will attempt to open Microsoft Outlook." -ForegroundColor Yellow
     Write-Host "If Outlook is not installed, this will fail gracefully." -ForegroundColor Yellow

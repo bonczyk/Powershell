@@ -843,15 +843,39 @@ function Generate-PerOwnerHtml {
 
     $html = ""
     
-    # Group by Owner (considering both Owner1 and Owner2)
+    # Group by Owner (considering both Owner1 and Owner2, and their display names if available)
     $ownerGroups = @{}
+    $ownerDisplayNames = @{}  # Map to store display names for emails
+    
     foreach ($item in $Data) {
         $owners = @()
-        if ($item.Owner1) { $owners += $item.Owner1 }
-        if ($item.Owner2) { $owners += $item.Owner2 }
+        
+        # Check if we have enriched display names (OwnerDisplayName1/OwnerDisplayName2)
+        if ($item.PSObject.Properties['OwnerDisplayName1']) {
+            if ($item.Owner1) { 
+                $owners += $item.Owner1
+                $ownerDisplayNames[$item.Owner1] = "$($item.OwnerDisplayName1) ($($item.Owner1))"
+            }
+            if ($item.Owner2) { 
+                $owners += $item.Owner2
+                $ownerDisplayNames[$item.Owner2] = "$($item.OwnerDisplayName2) ($($item.Owner2))"
+            }
+        }
+        else {
+            # Fallback to original Owner1/Owner2 for backward compatibility
+            if ($item.Owner1) { 
+                $owners += $item.Owner1
+                $ownerDisplayNames[$item.Owner1] = $item.Owner1
+            }
+            if ($item.Owner2) { 
+                $owners += $item.Owner2
+                $ownerDisplayNames[$item.Owner2] = $item.Owner2
+            }
+        }
         
         if ($owners.Count -eq 0) {
             $owners = @("Unassigned")
+            $ownerDisplayNames["Unassigned"] = "Unassigned"
         }
 
         foreach ($owner in $owners) {
@@ -867,12 +891,13 @@ function Generate-PerOwnerHtml {
     foreach ($owner in $sortedOwners) {
         $ownerData = $ownerGroups[$owner]
         $ownerRecordCount = $ownerData.Count
+        $ownerDisplay = $ownerDisplayNames[$owner]
         
         $detailsOpen = if ($Expandable) { "" } else { "open" }
         
         $html += @"
     <details class="group-container" $detailsOpen>
-        <summary class="group-header">👤 Owner: $owner ($ownerRecordCount records)</summary>
+        <summary class="group-header">👤 Owner: $ownerDisplay ($ownerRecordCount records)</summary>
         <div class="group-content">
 "@
 
@@ -990,9 +1015,22 @@ function Generate-PerServerHtml {
             $owner1 = $shareData[0].Owner1
             $owner2 = $shareData[0].Owner2
             
+            # Check if we have enriched display names
             $ownerInfo = ""
-            if ($owner1) { $ownerInfo += "Owner: $owner1" }
-            if ($owner2) { $ownerInfo += " | Co-Owner: $owner2" }
+            if ($shareData[0].PSObject.Properties['OwnerDisplayName1']) {
+                # Use display names with email addresses
+                if ($owner1) { 
+                    $ownerInfo += "Owner: $($shareData[0].OwnerDisplayName1) ($owner1)" 
+                }
+                if ($owner2) { 
+                    $ownerInfo += " | Co-Owner: $($shareData[0].OwnerDisplayName2) ($owner2)" 
+                }
+            }
+            else {
+                # Fallback to original Owner1/Owner2 for backward compatibility
+                if ($owner1) { $ownerInfo += "Owner: $owner1" }
+                if ($owner2) { $ownerInfo += " | Co-Owner: $owner2" }
+            }
             
             $html += @"
             <details class="group-container" $detailsOpen>
