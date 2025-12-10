@@ -48,7 +48,7 @@ function Generate-ShareAccessReport {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true, ValueFromPipeline = $false)]
-        [ValidateNotNullOrEmpty()]
+        [AllowEmptyCollection()]
         [PSCustomObject[]]$Data,
 
         [Parameter(Mandatory = $true)]
@@ -145,6 +145,7 @@ function Get-ReportSummary {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [PSCustomObject[]]$Data
     )
 
@@ -739,6 +740,7 @@ function Generate-HtmlReport {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [PSCustomObject[]]$Data,
 
         [Parameter(Mandatory = $true)]
@@ -839,6 +841,7 @@ function Generate-PerOwnerHtml {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [PSCustomObject[]]$Data,
 
         [Parameter(Mandatory = $false)]
@@ -959,6 +962,7 @@ function Generate-PerServerHtml {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [PSCustomObject[]]$Data,
 
         [Parameter(Mandatory = $false)]
@@ -1067,6 +1071,7 @@ function Generate-XlsxReport {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [PSCustomObject[]]$Data,
 
         [Parameter(Mandatory = $true)]
