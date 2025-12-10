@@ -74,11 +74,11 @@ function Generate-ShareAccessReport {
 
     begin {
         # Validate that required modules are available
-        $requiredModules = @('ImportExcel', 'PSWritePDF')
-        foreach ($module in $requiredModules) {
-            if (-not (Get-Module -ListAvailable -Name $module)) {
-                Write-Warning "Module '$module' is not installed. Some functionality may be limited."
-            }
+        if (-not (Get-Module -ListAvailable -Name 'ImportExcel')) {
+            Write-Warning "Module 'ImportExcel' is not installed. Excel (XLSX) report generation will be skipped."
+        }
+        if (-not (Get-Module -ListAvailable -Name 'PSWritePDF')) {
+            Write-Warning "Module 'PSWritePDF' is not installed. PDF report generation will be skipped."
         }
 
         # Set default paths if not specified
@@ -161,15 +161,8 @@ function Get-ReportSummary {
         }
     }
 
-    $uniqueOwners = @()
-    foreach ($item in $Data) {
-        if ($item.Owner1 -and $item.Owner1 -notin $uniqueOwners) {
-            $uniqueOwners += $item.Owner1
-        }
-        if ($item.Owner2 -and $item.Owner2 -notin $uniqueOwners) {
-            $uniqueOwners += $item.Owner2
-        }
-    }
+    # Efficiently collect unique owners
+    $uniqueOwners = @($Data | ForEach-Object { $_.Owner1; $_.Owner2 } | Where-Object { $_ } | Select-Object -Unique)
 
     return [PSCustomObject]@{
         TotalRecords    = $Data.Count
@@ -1116,6 +1109,10 @@ function Generate-XlsxReport {
                 foreach ($server in $servers) {
                     $serverData = $Data | Where-Object { $_.Server -eq $server.Server }
                     $worksheetName = $server.Server -replace '[\\/:*?"<>|]', '_'
+                    # Ensure worksheet name is not empty after sanitization
+                    if ([string]::IsNullOrWhiteSpace($worksheetName) -or $worksheetName -match '^_+$') {
+                        $worksheetName = "Server_$($servers.IndexOf($server) + 1)"
+                    }
                     $worksheetName = $worksheetName.Substring(0, [Math]::Min(31, $worksheetName.Length))
                     
                     $serverData | Select-Object Share, SharePath, Owner1, Owner2, ADGroupName, `
@@ -1125,17 +1122,18 @@ function Generate-XlsxReport {
                 }
             }
             elseif ($ReportType -eq "PerOwner") {
-                # Get unique owners
-                $owners = @()
-                foreach ($item in $Data) {
-                    if ($item.Owner1 -and $item.Owner1 -notin $owners) { $owners += $item.Owner1 }
-                    if ($item.Owner2 -and $item.Owner2 -notin $owners) { $owners += $item.Owner2 }
-                }
-                $owners = $owners | Sort-Object
+                # Get unique owners efficiently
+                $owners = @($Data | ForEach-Object { $_.Owner1; $_.Owner2 } | Where-Object { $_ } | Select-Object -Unique | Sort-Object)
                 
+                $ownerIndex = 0
                 foreach ($owner in $owners) {
+                    $ownerIndex++
                     $ownerData = $Data | Where-Object { $_.Owner1 -eq $owner -or $_.Owner2 -eq $owner }
                     $worksheetName = $owner -replace '[\\/:*?"<>|]', '_'
+                    # Ensure worksheet name is not empty after sanitization
+                    if ([string]::IsNullOrWhiteSpace($worksheetName) -or $worksheetName -match '^_+$') {
+                        $worksheetName = "Owner_$ownerIndex"
+                    }
                     $worksheetName = $worksheetName.Substring(0, [Math]::Min(31, $worksheetName.Length))
                     
                     $ownerData | Select-Object Server, Share, SharePath, ADGroupName, `
