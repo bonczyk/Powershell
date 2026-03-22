@@ -1,3 +1,12 @@
+| Script | Description (EN) | Opis (PL) |
+|--------|-------------------|-----------|
+| `ps.bat` | Hybrid batch/PowerShell launcher — runs PowerShell code directly from a `.bat` file | Hybrydowy launcher batch/PowerShell — uruchamia kod PowerShell bezpośrednio z pliku `.bat` |
+| `Compare-GPO.ps1` | Compares two Group Policy Objects (GPOs) and exports differences to TXT and Excel | Porównuje dwa obiekty zasad grupy (GPO) i eksportuje różnice do TXT i Excela |
+| `EdgeSeleniumTableToCSV.ps1` | Scrapes foreign exchange rate tables from AIB bank websites using Edge + Selenium and saves them as CSV | Pobiera tabele kursów walut ze stron banku AIB za pomocą Edge + Selenium i zapisuje je jako CSV |
+| `Set-DeploymentWorkWeekSchedule.ps1` | Sets SCCM package deployment schedule for work week days (Mon–Fri) | Ustawia harmonogram wdrażania pakietów SCCM na dni robocze (pon.–pt.) |
+
+
+
 # ps.bat
 
 Hybrid batch/PowerShell launcher — runs PowerShell code directly from a `.bat` file.
